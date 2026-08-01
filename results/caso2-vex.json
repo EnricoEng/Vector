@@ -1,0 +1,37 @@
+{
+  "document": {
+    "format": "VEX-SIMPLIFIED-POC",
+    "version": "1.0",
+    "author": "Reachability Analysis PoC",
+    "timestamp": "2026-07-30T23:32:51.370156+00:00"
+  },
+  "product": {
+    "name": "produto-poc",
+    "version": "1.0.0",
+    "source_file": "cases/case2_nao_alcancavel.py",
+    "entry_point": "main"
+  },
+  "vulnerabilities": [
+    {
+      "id": "CVE-POC-0002",
+      "component": "biblioteca-exemplo",
+      "component_version": "1.0.0",
+      "vulnerable_function": "vulnerable_function",
+      "status": "NOT_AFFECTED",
+      "analysis_state": "not_affected",
+      "justification": "code_not_reachable",
+      "response": [],
+      "residual_risk": false,
+      "detail": "Não foi identificado caminho no grafo de chamadas entre o ponto de entrada e a função vulnerável.",
+      "evidence": {
+        "analysis_type": "static_call_graph",
+        "entry_point": "main",
+        "vulnerable_function": "vulnerable_function",
+        "function_present": true,
+        "reachable": false,
+        "call_path": null,
+        "manual_assessment": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "vulnerabilities": [
+    {
+      "id": "CVE-POC-0003",
+      "component": "biblioteca-exemplo",
+      "component_version": "1.0.0",
+      "function": "vulnerable_function"
+    }
+  ]
+}

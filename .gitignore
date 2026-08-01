@@ -1,0 +1,21 @@
+# Ambiente virtual
+.venv/
+venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribuição / empacotamento
+build/
+dist/
+*.egg-info/
+
+# Sistema operacional
+.DS_Store
+
+# Editores
+.vscode/
+.idea/

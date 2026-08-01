@@ -1,0 +1,50 @@
+{
+  "document": {
+    "format": "VEX-SIMPLIFIED-POC",
+    "version": "1.0",
+    "author": "Reachability Analysis PoC",
+    "timestamp": "2026-07-31T00:36:37.433008+00:00"
+  },
+  "product": {
+    "name": "produto-poc",
+    "version": "1.0.0",
+    "source_file": "cases\\case1_alcancavel_exploravel.py",
+    "entry_point": "main"
+  },
+  "vulnerabilities": [
+    {
+      "id": "CVE-POC-0001",
+      "component": "biblioteca-exemplo",
+      "component_version": "1.0.0",
+      "vulnerable_function": "vulnerable_function",
+      "status": "AFFECTED",
+      "analysis_state": "exploitable",
+      "justification": null,
+      "response": [
+        "update"
+      ],
+      "residual_risk": true,
+      "detail": "A função vulnerável é alcançável, recebe entrada controlada pelo atacante e não possui mitigação identificada.",
+      "evidence": {
+        "analysis_type": "static_call_graph",
+        "entry_point": "main",
+        "vulnerable_function": "vulnerable_function",
+        "function_present": true,
+        "reachable": true,
+        "call_path": [
+          "main",
+          "process_request",
+          "parse_request",
+          "vulnerable_function"
+        ],
+        "manual_assessment": {
+          "attacker_input": true,
+          "mitigation_present": false,
+          "mitigation_description": null,
+          "analyst_notes": "."
+        },
+        "call_graph_image": "results\\graphs\\CVE-POC-0001_call_graph.png"
+      }
+    }
+  ]
+}
