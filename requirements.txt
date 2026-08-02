@@ -1,1 +1,16 @@
+# Geração da representação visual do grafo de chamadas.
+#
+# O pacote apenas escreve o arquivo DOT e invoca o programa externo
+# "dot". Esse programa é instalado separadamente, a partir de
+# https://graphviz.org/download/. Sem ele, a PoC continua funcionando
+# e grava somente o arquivo DOT.
 graphviz==0.21
+
+# Análise sintática de código C.
+#
+# As versões abaixo estão fixadas porque o tree-sitter valida a versão
+# da ABI da gramática: combinações mais recentes de tree-sitter-c são
+# recusadas por versões mais antigas de tree-sitter, com o erro
+# "Incompatible Language version".
+tree-sitter==0.23.2
+tree-sitter-c==0.23.4

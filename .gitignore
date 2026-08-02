@@ -1,5 +1,8 @@
 # Ambiente virtual
-.venv/
+#
+# O padrão .venv* cobre ambientes separados por sistema operacional,
+# como .venvMac, já que o mesmo projeto é usado no Windows e no macOS.
+.venv*/
 venv/
 env/
 
