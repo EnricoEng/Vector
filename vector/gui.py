@@ -1,9 +1,13 @@
 # Implementa a interface gráfica da PoC.
 #
 # A interface é escrita com tkinter, que faz parte da biblioteca padrão
-# do Python. Essa escolha evita acrescentar uma dependência apenas para
-# desenhar a janela e mantém a PoC executável em qualquer instalação
-# padrão do Python.
+# do Python, o que mantém a PoC executável em qualquer instalação
+# padrão.
+#
+# Quando o pacote ttkbootstrap está disponível, ele é usado no lugar do
+# ttk para aplicar um tema moderno aos widgets. A dependência é
+# opcional: sem ela, a janela é desenhada com o tema "clam" do próprio
+# ttk e todas as funcionalidades permanecem idênticas.
 #
 # A interface não contém regra de análise. Ela apenas coleta os dados
 # informados pelo analista e chama vector.analysis.run_analysis, a mesma
@@ -19,8 +23,56 @@ import tkinter as tk
 # Importa os diálogos de arquivo e as caixas de mensagem.
 from tkinter import filedialog, messagebox
 
-# Importa os widgets com aparência nativa do sistema operacional.
-from tkinter import ttk
+
+# Define a versão mínima do Tk capaz de desenhar a interface.
+#
+# O macOS inclui o Tcl/Tk 8.5.9, uma versão congelada por volta de 2010
+# e depreciada pela Apple desde o macOS 10.14. Nas versões recentes do
+# sistema, essa build abre a janela mas não desenha os widgets,
+# produzindo uma tela inteiramente branca.
+#
+# O problema está no Tk distribuído com o sistema, não na PoC.
+MINIMUM_TK_VERSION = 8.6
+
+
+# Tenta usar o ttkbootstrap, que substitui o conjunto de widgets do ttk
+# por uma versão com temas modernos.
+#
+# São exigidas duas condições. A primeira é o pacote estar instalado,
+# pois ele não é obrigatório. A segunda é o Tk ser no mínimo 8.6: o
+# ttkbootstrap desenha seus widgets a partir de imagens PNG, e em
+# versões anteriores a criação da janela falha com o erro
+# "couldn't recognize image data".
+#
+# Quando qualquer uma das condições não é atendida, são usados os
+# widgets do próprio ttk, com o tema "clam".
+if tk.TkVersion >= MINIMUM_TK_VERSION:
+    try:
+
+        # Importa o ttkbootstrap sob o mesmo nome usado para o ttk, o
+        # que permite manter o restante do arquivo inalterado.
+        import ttkbootstrap as ttk
+
+        # Registra que os temas modernos estão disponíveis.
+        HAS_BOOTSTRAP = True
+
+    # Captura a ausência do pacote.
+    except ImportError:
+
+        # Importa os widgets padrão do ttk.
+        from tkinter import ttk
+
+        # Registra que apenas o tema padrão está disponível.
+        HAS_BOOTSTRAP = False
+
+# Executa quando a versão do Tk é insuficiente.
+else:
+
+    # Importa os widgets padrão do ttk.
+    from tkinter import ttk
+
+    # Registra que apenas o tema padrão está disponível.
+    HAS_BOOTSTRAP = False
 
 # Importa o widget de texto com barra de rolagem.
 from tkinter.scrolledtext import ScrolledText
@@ -34,6 +86,12 @@ from .analysis import OUTPUT_FORMATS, run_analysis, save_analysis
 # Importa a exceção base, usada para tratar todos os erros previstos.
 from .errors import VectorError
 
+# Importa o carregamento e o desenho da logo.
+from .logo import draw_logo, load_logo_image
+
+# Importa a versão da PoC, exibida no cabeçalho.
+from .version import __version__
+
 # Importa os analisadores, usados para descobrir as funções declaradas
 # antes de executar a análise completa.
 from .parsers import SUPPORTED_LANGUAGES, analyze as analyze_source
@@ -46,15 +104,30 @@ from .reachability import suggest_entry_points
 AUTO_DETECT_LABEL = "Detectar automaticamente"
 
 
-# Define a versão mínima do Tk capaz de desenhar a interface.
+# Define o tema aplicado quando o ttkbootstrap está disponível.
 #
-# O macOS inclui o Tcl/Tk 8.5.9, uma versão congelada por volta de 2010
-# e depreciada pela Apple desde o macOS 10.14. Nas versões recentes do
-# sistema, essa build abre a janela mas não desenha os widgets,
-# produzindo uma tela inteiramente branca.
+# O tema "superhero" foi escolhido porque seu fundo azul-ardósia
+# acompanha o azul-marinho da logo, e sua cor primária é próxima do azul
+# usado para o ponto de entrada nos grafos.
 #
-# O problema está no Tk distribuído com o sistema, não na PoC.
-MINIMUM_TK_VERSION = 8.6
+# Os demais temas escuros do ttkbootstrap são "darkly", "cyborg",
+# "solar" e "vapor". Há também temas claros, entre eles "cosmo",
+# "flatly" e "yeti". Trocar o valor abaixo troca o tema da janela.
+BOOTSTRAP_THEME = "superhero"
+
+
+# Define a função que aplica opções de estilo do ttkbootstrap.
+def boot(**options):
+    """
+    Devolve opções de estilo somente quando o ttkbootstrap está em uso.
+
+    O parâmetro bootstyle não existe nos widgets do ttk padrão e
+    causaria um erro. Esta função permite escrever a chamada uma única
+    vez, funcionando com e sem a dependência.
+    """
+
+    # Devolve as opções apenas quando os temas estão disponíveis.
+    return options if HAS_BOOTSTRAP else {}
 
 
 # Define a função que verifica a versão do Tk instalada.
@@ -244,6 +317,7 @@ class ManualAssessmentDialog(tk.Toplevel):
             buttons,
             text="Confirmar",
             command=self.on_confirm,
+            **boot(bootstyle="success"),
         ).pack(side="right")
 
         # Cria o botão que cancela a avaliação manual.
@@ -251,6 +325,7 @@ class ManualAssessmentDialog(tk.Toplevel):
             buttons,
             text="Não sei responder",
             command=self.on_cancel,
+            **boot(bootstyle="secondary-outline"),
         ).pack(side="right", padx=(0, 8))
 
     # Define o método que cria uma linha de botões de resposta.
@@ -413,8 +488,28 @@ class AnalyzerWindow(ttk.Frame):
     # Define o método que monta os widgets da janela.
     def build_widgets(self):
 
-        # Cria o quadro do formulário.
-        form = ttk.Frame(self)
+        # Cria o cabeçalho com a logo e o título.
+        self.build_header()
+
+        # Cria o painel que agrupa os campos da análise.
+        #
+        # O painel dá um contorno e um título ao formulário, separando
+        # visualmente os parâmetros de entrada dos botões de ação e do
+        # registro de execução.
+        # O nome Labelframe é usado com o "f" minúsculo porque é a única
+        # grafia presente tanto no ttk quanto no ttkbootstrap.
+        panel = ttk.Labelframe(
+            self,
+            text=" Parâmetros da análise ",
+            padding=(14, 10, 14, 14),
+            **boot(bootstyle="secondary"),
+        )
+
+        # Posiciona o painel.
+        panel.pack(fill="x", pady=(14, 0))
+
+        # Cria o quadro do formulário dentro do painel.
+        form = ttk.Frame(panel)
 
         # Posiciona o formulário.
         form.pack(fill="x")
@@ -492,6 +587,7 @@ class AnalyzerWindow(ttk.Frame):
         ttk.Button(
             source_buttons,
             text="Arquivo...",
+            **boot(bootstyle="secondary-outline"),
             command=self.choose_source_file,
             width=10,
         ).pack(side="left")
@@ -503,6 +599,7 @@ class AnalyzerWindow(ttk.Frame):
         ttk.Button(
             source_buttons,
             text="Pasta...",
+            **boot(bootstyle="secondary-outline"),
             command=self.choose_source_directory,
             width=8,
         ).pack(side="left", padx=(4, 0))
@@ -548,6 +645,7 @@ class AnalyzerWindow(ttk.Frame):
         ttk.Button(
             form,
             text="Detectar",
+            **boot(bootstyle="secondary-outline"),
             command=self.detect_entry_points,
             width=10,
         ).grid(row=row, column=2, sticky="w", pady=4)
@@ -641,6 +739,7 @@ class AnalyzerWindow(ttk.Frame):
             actions,
             text="Analisar",
             command=self.run,
+            **boot(bootstyle="primary"),
         )
 
         # Posiciona o botão de análise.
@@ -651,6 +750,7 @@ class AnalyzerWindow(ttk.Frame):
             actions,
             text="Limpar registro",
             command=self.clear_log,
+            **boot(bootstyle="secondary-outline"),
         ).pack(side="left", padx=(8, 0))
 
         # Cria o botão que abre a pasta dos resultados.
@@ -659,6 +759,7 @@ class AnalyzerWindow(ttk.Frame):
             text="Abrir pasta dos resultados",
             command=self.open_results_directory,
             state="disabled",
+            **boot(bootstyle="secondary-outline"),
         )
 
         # Posiciona o botão de abertura da pasta.
@@ -667,19 +768,232 @@ class AnalyzerWindow(ttk.Frame):
         # Exibe o rótulo do registro de execução.
         ttk.Label(
             self,
-            text="Registro da análise:",
+            text="Registro da análise",
+            font=("TkDefaultFont", 10, "bold"),
         ).pack(anchor="w")
 
+        # Obtém a paleta adequada ao tema em uso.
+        #
+        # As cores do registro acompanham o tema da janela: um registro
+        # escuro dentro de uma janela clara destoaria do restante da
+        # interface.
+        palette = self.log_palette()
+
         # Cria a área de texto que exibe o andamento e o resultado.
+        #
+        # A fonte monoespaçada mantém o alinhamento do grafo de chamadas
+        # e dos separadores exibidos durante a execução.
         self.log = ScrolledText(
             self,
-            height=18,
+            height=16,
             wrap="word",
             state="disabled",
+            font=("TkFixedFont", 10),
+            background=palette["background"],
+            foreground=palette["foreground"],
+            insertbackground=palette["foreground"],
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=8,
         )
 
         # Posiciona a área de texto.
-        self.log.pack(fill="both", expand=True, pady=(4, 0))
+        self.log.pack(fill="both", expand=True, pady=(6, 0))
+
+        # Define as cores usadas para destacar cada tipo de mensagem.
+        #
+        # O destaque permite localizar rapidamente um aviso de cobertura
+        # ou um erro no meio de um registro longo.
+        for tag in ("aviso", "erro", "sucesso", "titulo", "neutro"):
+            self.log.tag_configure(tag, foreground=palette[tag])
+
+        # Cria a barra de estado, exibida no rodapé da janela.
+        self.status = ttk.Label(
+            self,
+            text="Pronto. Preencha os campos e clique em Analisar.",
+            foreground="#64748B",
+        )
+
+        # Posiciona a barra de estado.
+        self.status.pack(fill="x", pady=(8, 0))
+
+    # Define o método que descobre se o tema em uso é escuro.
+    def is_dark_theme(self):
+        """
+        Informa se o tema atual possui fundo escuro.
+
+        A decisão é tomada pela luminância da cor de fundo, e não pelo
+        nome do tema, de modo que qualquer tema escolhido pelo analista
+        seja tratado corretamente.
+        """
+
+        # Inicia o tratamento de temas que não definem a cor de fundo.
+        try:
+
+            # Consulta a cor de fundo aplicada aos quadros.
+            background = ttk.Style().lookup("TFrame", "background")
+
+            # Converte a cor em componentes de 16 bits.
+            #
+            # O método winfo_rgb aceita tanto valores hexadecimais
+            # quanto nomes de cor, como "systemWindowBackgroundColor",
+            # usado pelo tema nativo do macOS.
+            red, green, blue = self.winfo_rgb(background)
+
+        # Captura cores desconhecidas e temas sem a propriedade.
+        except (tk.TclError, ValueError):
+
+            # Assume tema claro, que é o padrão do tkinter.
+            return False
+
+        # Calcula a luminância percebida, normalizada entre 0 e 1.
+        luminance = (
+            0.299 * red + 0.587 * green + 0.114 * blue
+        ) / 65535
+
+        # Considera escuro quando a luminância fica abaixo da metade.
+        return luminance < 0.5
+
+    # Define o método que devolve a paleta do registro.
+    def log_palette(self):
+        """
+        Devolve as cores do registro conforme o tema em uso.
+        """
+
+        # Executa quando o tema possui fundo escuro.
+        if self.is_dark_theme():
+
+            # Devolve a paleta clara sobre fundo escuro.
+            return {
+                "background": "#0F172A",
+                "foreground": "#E2E8F0",
+                "aviso": "#FBBF24",
+                "erro": "#F87171",
+                "sucesso": "#4ADE80",
+                "titulo": "#60A5FA",
+                "neutro": "#94A3B8",
+            }
+
+        # Devolve a paleta escura sobre fundo claro.
+        #
+        # Os tons são mais fechados que os do tema escuro para manter o
+        # contraste legível sobre o branco.
+        return {
+            "background": "#FFFFFF",
+            "foreground": "#0F172A",
+            "aviso": "#B45309",
+            "erro": "#B91C1C",
+            "sucesso": "#15803D",
+            "titulo": "#1D4ED8",
+            "neutro": "#64748B",
+        }
+
+    # Define o método que monta o cabeçalho da janela.
+    def build_header(self):
+        """
+        Monta a faixa superior, com a logo, o nome e a descrição.
+
+        A logo é desenhada em um Canvas pelo módulo logo.py, e não
+        carregada de um arquivo de imagem. Isso evita depender do
+        suporte a PNG, que só existe a partir do Tk 8.6, e mantém o
+        desenho nítido em qualquer resolução.
+        """
+
+        # Cria o quadro do cabeçalho.
+        header = ttk.Frame(self)
+
+        # Posiciona o cabeçalho.
+        header.pack(fill="x")
+
+        # Define o lado da área ocupada pela logo.
+        logo_size = 64
+
+        # Cria o Canvas que receberá o desenho.
+        #
+        # O destaque da borda é removido para que o Canvas não exiba a
+        # moldura que o tkinter desenha por padrão.
+        logo_canvas = tk.Canvas(
+            header,
+            width=logo_size,
+            height=logo_size,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+
+        # Posiciona o Canvas à esquerda do cabeçalho.
+        logo_canvas.pack(side="left", padx=(0, 14))
+
+        # Ajusta o fundo do Canvas para acompanhar o tema da janela.
+        #
+        # A consulta é protegida porque nem todo tema define essa cor.
+        try:
+            logo_canvas.configure(
+                background=ttk.Style().lookup("TFrame", "background")
+            )
+        except tk.TclError:
+            pass
+
+        # Tenta carregar a logo a partir do arquivo PNG.
+        #
+        # A imagem é preferida ao desenho porque possui antialiasing
+        # verdadeiro, enquanto o Canvas do Tk desenha sem suavização no
+        # Windows.
+        self.logo_image = load_logo_image(logo_size)
+
+        # Verifica se a imagem pôde ser carregada.
+        if self.logo_image is not None:
+
+            # Exibe a imagem centralizada no Canvas.
+            #
+            # A referência fica guardada em self.logo_image porque o
+            # tkinter não mantém referência às imagens, e uma imagem
+            # coletada pelo gerenciador de memória desapareceria.
+            logo_canvas.create_image(
+                logo_size / 2,
+                logo_size / 2,
+                image=self.logo_image,
+            )
+
+        # Executa quando a imagem não está disponível.
+        else:
+
+            # Desenha a logo com as primitivas do Canvas.
+            #
+            # É o caso do Tk 8.5, que não carrega PNG, e o de uma
+            # instalação sem a pasta assets.
+            draw_logo(logo_canvas, logo_size)
+
+        # Cria o quadro que agrupa os textos do cabeçalho.
+        titles = ttk.Frame(header)
+
+        # Posiciona o quadro dos textos.
+        titles.pack(side="left", fill="x", expand=True)
+
+        # Exibe o nome da ferramenta.
+        ttk.Label(
+            titles,
+            text="Vector",
+            font=("TkDefaultFont", 22, "bold"),
+        ).pack(anchor="w")
+
+        # Exibe a descrição da ferramenta.
+        ttk.Label(
+            titles,
+            text=(
+                "Análise de alcançabilidade e geração de declarações VEX"
+            ),
+        ).pack(anchor="w")
+
+        # Exibe a versão da PoC, alinhada à direita.
+        ttk.Label(
+            header,
+            text=f"versão {__version__}",
+            foreground="#64748B",
+        ).pack(side="right", anchor="s")
+
+        # Acrescenta uma linha separadora abaixo do cabeçalho.
+        ttk.Separator(self).pack(fill="x", pady=(12, 0))
 
     # Define o método que cria uma linha simples de texto.
     def build_text_row(self, form, row, label, variable):
@@ -862,15 +1176,61 @@ class AnalyzerWindow(ttk.Frame):
             # Armazena o caminho escolhido.
             self.output_file.set(chosen)
 
+    # Define o método que descobre o tipo de uma mensagem.
+    @staticmethod
+    def message_tag(message):
+        """
+        Escolhe a cor da mensagem a partir do seu conteúdo.
+
+        A detecção é feita pelo texto porque este método também recebe
+        as mensagens de andamento produzidas pelo motor de análise, que
+        não conhece a interface e envia apenas texto.
+        """
+
+        # Remove os espaços do início para comparar o começo do texto.
+        stripped = message.lstrip()
+
+        # Verifica se a mensagem é um aviso.
+        if stripped.startswith("Aviso:"):
+            return "aviso"
+
+        # Verifica se a mensagem é um erro.
+        if stripped.startswith("Erro:"):
+            return "erro"
+
+        # Verifica se a mensagem informa um arquivo gravado.
+        if stripped.startswith("Declaração VEX salva em:"):
+            return "sucesso"
+
+        # Verifica se a mensagem é um separador ou um título.
+        if stripped.startswith(("=", "-")) or stripped.endswith(":"):
+            return "neutro"
+
+        # Verifica se a mensagem identifica uma vulnerabilidade.
+        if stripped.startswith(("CVE:", "Grafo de chamadas")):
+            return "titulo"
+
+        # Devolve None quando a mensagem usa a cor padrão.
+        return None
+
     # Define o método que escreve uma mensagem no registro.
-    def write(self, message):
+    def write(self, message, tag=None):
 
         # Habilita a edição do widget, que permanece somente leitura
         # para impedir que o analista altere o registro.
         self.log.configure(state="normal")
 
-        # Acrescenta a mensagem ao final do texto.
-        self.log.insert("end", f"{message}\n")
+        # Descobre a cor da mensagem quando ela não foi informada.
+        if tag is None:
+            tag = self.message_tag(message)
+
+        # Acrescenta a mensagem ao final do texto, aplicando a cor
+        # correspondente ao seu tipo.
+        self.log.insert(
+            "end",
+            f"{message}\n",
+            () if tag is None else (tag,),
+        )
 
         # Rola o texto até a última linha.
         self.log.see("end")
@@ -882,6 +1242,16 @@ class AnalyzerWindow(ttk.Frame):
         #
         # A análise roda na mesma thread da interface, então esta
         # chamada é o que mantém o registro visível durante a execução.
+        self.update_idletasks()
+
+    # Define o método que atualiza a barra de estado.
+    def set_status(self, message, color="#64748B"):
+
+        # Atualiza o texto e a cor da barra.
+        self.status.configure(text=message, foreground=color)
+
+        # Redesenha a interface imediatamente, já que a análise ocorre
+        # na mesma thread e bloquearia a atualização automática.
         self.update_idletasks()
 
     # Define o método que limpa o registro de execução.
@@ -1037,6 +1407,9 @@ class AnalyzerWindow(ttk.Frame):
         # Desabilita o botão para impedir execuções simultâneas.
         self.analyze_button.configure(state="disabled")
 
+        # Informa na barra de estado que a análise começou.
+        self.set_status("Analisando...", "#2563EB")
+
         # Inicia o tratamento dos erros previstos pela PoC.
         try:
 
@@ -1087,7 +1460,10 @@ class AnalyzerWindow(ttk.Frame):
         except VectorError as error:
 
             # Registra o erro no log.
-            self.write(f"\nErro: {error}")
+            self.write(f"Erro: {error}")
+
+            # Informa a falha na barra de estado.
+            self.set_status("A análise falhou.", "#DC2626")
 
             # Exibe a mensagem em uma caixa de erro.
             #
@@ -1188,6 +1564,28 @@ class AnalyzerWindow(ttk.Frame):
         # Habilita o botão que abre a pasta dos resultados.
         self.open_button.configure(state="normal")
 
+        # Conta quantas vulnerabilidades foram classificadas como
+        # afetantes, informação que resume o resultado da análise.
+        affected = sum(
+            1
+            for result in analysis["results"]
+            if result["status"] == "AFFECTED"
+        )
+
+        # Monta o resumo exibido na barra de estado.
+        summary = (
+            f"Análise concluída: {len(analysis['results'])} "
+            f"vulnerabilidade(s), {affected} classificada(s) como "
+            f"AFFECTED, {len(analysis['warnings'])} aviso(s)."
+        )
+
+        # Informa o resultado, destacando em vermelho quando existe
+        # alguma vulnerabilidade afetante.
+        self.set_status(
+            summary,
+            "#DC2626" if affected else "#16A34A",
+        )
+
     # Define o método que abre a pasta dos resultados.
     def open_results_directory(self):
         """
@@ -1271,17 +1669,93 @@ def launch():
         # conseguir desenhar a caixa de diálogo.
         print(warning, file=sys.stderr)
 
-    # Cria a janela raiz da aplicação.
-    root = tk.Tk()
+    # Permite trocar o conjunto de widgets caso o tema falhe.
+    global ttk, HAS_BOOTSTRAP
+
+    # Inicializa a janela como ausente.
+    root = None
+
+    # Verifica se os temas modernos estão disponíveis.
+    if HAS_BOOTSTRAP:
+
+        # Inicia o tratamento de falhas na aplicação do tema.
+        #
+        # A proteção existe porque o ttkbootstrap foi desenvolvido para
+        # o Tk 8.6, e o Tk 9.0 introduziu mudanças incompatíveis. Em vez
+        # de tentar prever quais combinações funcionam, a interface
+        # tenta aplicar o tema e volta ao padrão se algo falhar.
+        try:
+
+            # Cria a janela já com o tema aplicado.
+            #
+            # A classe Window do ttkbootstrap substitui tk.Tk e
+            # configura o tema de todos os widgets criados a partir
+            # dela.
+            root = ttk.Window(themename=BOOTSTRAP_THEME)
+
+        # Captura qualquer falha na criação da janela temática.
+        except Exception as error:
+
+            # Informa o motivo no terminal, sem interromper o programa.
+            print(
+                f"Aviso: não foi possível aplicar o tema "
+                f"'{BOOTSTRAP_THEME}' do ttkbootstrap "
+                f"({type(error).__name__}: {error}). "
+                f"A interface será exibida com o tema padrão.",
+                file=sys.stderr,
+            )
+
+            # Remove a janela deixada pela tentativa que falhou.
+            #
+            # Sem essa limpeza, a criação de uma nova janela raiz
+            # produziria duas instâncias do interpretador Tcl.
+            if tk._default_root is not None:
+                try:
+                    tk._default_root.destroy()
+                except Exception:
+                    pass
+                tk._default_root = None
+
+            # Volta a usar os widgets padrão do ttk.
+            #
+            # A troca precisa ocorrer antes de qualquer widget ser
+            # criado, pois os widgets do ttkbootstrap dependem do tema
+            # que acabou de falhar.
+            from tkinter import ttk as standard_ttk
+
+            ttk = standard_ttk
+            HAS_BOOTSTRAP = False
+
+    # Verifica se a janela ainda não foi criada.
+    #
+    # É o caso de o ttkbootstrap não estar instalado e o caso de a
+    # aplicação do tema ter falhado.
+    if root is None:
+
+        # Cria a janela raiz padrão do tkinter.
+        root = tk.Tk()
+
+        # Aplica um tema com aparência uniforme entre sistemas.
+        #
+        # O tema "clam" acompanha o tkinter e desenha os widgets de
+        # forma mais consistente que o padrão de cada sistema. A troca é
+        # protegida porque um tema indisponível levantaria uma exceção.
+        try:
+            ttk.Style().theme_use("clam")
+        except tk.TclError:
+            pass
 
     # Define o título da janela.
     root.title("Vector — Análise de alcançabilidade e VEX")
 
     # Define o tamanho inicial da janela.
-    root.geometry("900x760")
+    #
+    # A altura é folgada porque os widgets do ttkbootstrap são um pouco
+    # mais altos que os do ttk padrão.
+    root.geometry("960x900")
 
     # Define o tamanho mínimo, evitando que os campos fiquem cortados.
-    root.minsize(760, 600)
+    root.minsize(840, 700)
 
     # Cria a janela principal da PoC.
     AnalyzerWindow(root)

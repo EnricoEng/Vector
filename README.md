@@ -1,4 +1,14 @@
-# Vector — Reachability Analysis PoC
+<p align="center">
+  <img src="assets/logo.svg" alt="Vector" width="128" height="128">
+</p>
+
+<h1 align="center">Vector — Reachability Analysis PoC</h1>
+
+<p align="center">
+  Triagem de vulnerabilidades por alcançabilidade de código, com geração de declarações VEX.
+</p>
+
+---
 
 Prova de conceito para triagem de vulnerabilidades baseada em **alcançabilidade de código** (*reachability analysis*), com geração de declarações **VEX** simplificadas.
 
@@ -21,6 +31,7 @@ Quando não é, a vulnerabilidade pode ser documentadamente despriorizada. Quand
 
 ## Índice
 
+- [Início rápido](#início-rápido)
 - [Visão geral](#visão-geral)
 - [Como funciona](#como-funciona)
 - [Modelo de decisão](#modelo-de-decisão)
@@ -40,6 +51,52 @@ Quando não é, a vulnerabilidade pode ser documentadamente despriorizada. Quand
 - [Solução de problemas](#solução-de-problemas)
 - [Aviso de segurança](#aviso-de-segurança)
 - [Contexto acadêmico](#contexto-acadêmico)
+
+---
+
+## Início rápido
+
+Para quem quer apenas ver a ferramenta funcionando. Os detalhes de cada etapa estão em [Instalação](#instalação) e no [Guia de uso](#guia-de-uso-passo-a-passo).
+
+**Pré-requisitos:** Python 3.9 ou superior e Git.
+
+**1. Obter o projeto**
+
+```bash
+git clone https://github.com/EnricoEng/Vector.git
+cd Vector
+```
+
+**2. Criar o ambiente e instalar as dependências**
+
+Linux ou macOS:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+```
+
+Windows (PowerShell):
+
+```powershell
+python -m venv .venv; .\.venv\Scripts\Activate.ps1; pip install -r requirements.txt
+```
+
+**3. Executar um caso pronto**
+
+```bash
+python analyzer.py --source cases/case1_alcancavel_exploravel.py --cves data_cves/case1.json --entry main --product teste --version 1.0.0 --output results/teste-vex.json
+```
+
+A saída deve terminar com `Declaração VEX salva em: results/teste-vex.json`. Se terminar, está tudo funcionando.
+
+**4. Abrir a interface gráfica**
+
+```bash
+python analyzer.py --gui
+```
+
+> [!TIP]
+> Nenhuma dependência externa é obrigatória para analisar código **Python**. Elas são necessárias para analisar **C** (`tree-sitter`), gerar as **imagens** dos grafos (`graphviz` mais o programa `dot`) e aplicar o **tema escuro** da interface (`ttkbootstrap`). A ferramenta funciona sem cada uma delas, avisando o que deixou de ser feito.
 
 ---
 
@@ -159,7 +216,26 @@ python --version
 
 É necessário Python **3.9 ou superior**. No macOS e no Linux, use `python3` no lugar de `python` em todos os comandos deste guia.
 
-### Passo 2 — Criar e ativar um ambiente virtual
+Para usar a interface gráfica, verifique também a versão do Tk:
+
+```bash
+python -c "import tkinter; print(tkinter.TkVersion)"
+```
+
+O resultado precisa ser **8.6 ou superior**. As versões 8.6 e 9.0 foram testadas. Se o resultado for `8.5`, consulte o aviso ao final desta seção.
+
+### Passo 2 — Obter o projeto
+
+```bash
+git clone https://github.com/EnricoEng/Vector.git
+cd Vector
+```
+
+Sem o Git instalado, use o botão **Code → Download ZIP** na página do repositório e extraia o arquivo.
+
+Todos os comandos deste guia pressupõem que o terminal está aberto na pasta do projeto.
+
+### Passo 3 — Criar e ativar um ambiente virtual
 
 **Windows — PowerShell**
 
@@ -182,33 +258,76 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### Passo 3 — Instalar as dependências
+### Passo 4 — Instalar as dependências
+
+Com o ambiente virtual ativado:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-| Pacote | Finalidade | Obrigatório? |
+| Pacote | Finalidade | O que acontece sem ele |
 |---|---|---|
-| `tree-sitter`, `tree-sitter-c` | Análise de código C | Apenas para C. Python funciona sem eles |
-| `graphviz` | Geração do grafo de chamadas | Não. Sem ele, a análise conclui e apenas a figura deixa de ser gerada |
+| `tree-sitter`, `tree-sitter-c` | Análise de código C | A análise de C é interrompida com uma mensagem orientando a instalação. A análise de Python não é afetada |
+| `graphviz` | Grafo de chamadas | A análise conclui normalmente e apenas a imagem PNG deixa de ser gerada |
+| `ttkbootstrap` | Tema escuro da interface | A janela usa o tema `clam` do próprio `ttk`, com todas as funcionalidades idênticas |
+
+Nenhuma delas é obrigatória para analisar código Python.
+
+#### Tema da interface
+
+Quando o `ttkbootstrap` está instalado **e** o Tk é 8.6 ou superior, a janela usa o tema escuro `superhero`, escolhido por acompanhar o azul-marinho da logo. Caso contrário, é usado o tema `clam` do `ttk`.
+
+As duas condições são verificadas em conjunto porque o `ttkbootstrap` desenha seus widgets a partir de imagens PNG: no Tk 8.5 a criação da janela falharia com `couldn't recognize image data`.
+
+A interface é tolerante a falhas nessa etapa. Se a aplicação do tema não funcionar — por exemplo em uma combinação de versões não prevista —, a janela avisa no terminal, volta ao tema padrão e abre normalmente. Nunca se fica sem interface por causa do tema.
+
+As cores do registro de execução acompanham o tema: fundo escuro com texto claro em temas escuros, fundo branco com texto escuro em temas claros. A decisão é tomada pela luminância da cor de fundo, de modo que qualquer tema escolhido seja tratado corretamente.
+
+Para trocar o tema, altere a constante `BOOTSTRAP_THEME` em [vector/gui.py](vector/gui.py). Os temas escuros disponíveis são `superhero`, `darkly`, `cyborg`, `solar` e `vapor`; entre os claros estão `cosmo`, `flatly` e `yeti`.
 
 > [!NOTE]
 > As versões de `tree-sitter` e `tree-sitter-c` estão fixadas no `requirements.txt`. O `tree-sitter` valida a versão da ABI da gramática, e combinações mais recentes de `tree-sitter-c` são recusadas por versões mais antigas de `tree-sitter`, com o erro `Incompatible Language version`.
 
-### Passo 4 — Instalar o Graphviz (opcional)
+### Passo 5 — Instalar o Graphviz (opcional)
 
 O pacote Python `graphviz` apenas escreve o arquivo DOT e invoca o programa externo `dot`, que é instalado separadamente a partir de [graphviz.org/download](https://graphviz.org/download/).
 
 Sem ele, a ferramenta continua funcionando: a análise é concluída, o arquivo DOT é gravado e apenas a imagem PNG deixa de ser gerada. A ausência da figura é registrada como aviso e não altera a conclusão sobre alcançabilidade.
 
-### Passo 5 — Verificar a instalação
+Para verificar se o programa está acessível:
+
+```bash
+dot -V
+```
+
+### Passo 6 — Verificar a instalação
+
+Analisando um caso em **Python**, que não exige dependências externas:
 
 ```bash
 python analyzer.py --source cases/case1_alcancavel_exploravel.py --cves data_cves/case1.json --entry main --product teste --version 1.0.0 --output results/teste-vex.json
 ```
 
-Se a saída terminar com `Declaração VEX salva em: results/teste-vex.json`, a instalação está correta.
+A saída deve terminar com `Declaração VEX salva em: results/teste-vex.json`.
+
+Analisando um caso em **C**, que confirma a instalação do `tree-sitter`:
+
+```bash
+python analyzer.py --source cases/case4_c_alcancavel_exploravel.c --cves data_cves/case1.json --entry main --product teste --version 1.0.0 --output results/teste-c-vex.json
+```
+
+Nos dois casos, o caminho encontrado deve ser:
+
+```text
+main -> process_request -> parse_request -> vulnerable_function
+```
+
+E a interface gráfica:
+
+```bash
+python analyzer.py --gui
+```
 
 ### Requisito adicional para a interface gráfica
 
@@ -219,7 +338,7 @@ sudo apt install python3-tk
 ```
 
 > [!WARNING]
-> **No macOS é necessário Tk 8.6.** O Python das *Command Line Tools*, em `/usr/bin/python3`, usa o Tcl/Tk **8.5.9**, versão depreciada pela Apple desde o macOS 10.14. Nas versões recentes do sistema, ela abre a janela mas **não desenha os campos**, resultando em uma tela inteiramente branca. Consulte [Solução de problemas](#a-interface-gráfica-abre-em-branco-no-macos).
+> **É necessário Tk 8.6 ou superior.** O Python das *Command Line Tools* do macOS, em `/usr/bin/python3`, usa o Tcl/Tk **8.5.9**, versão depreciada pela Apple desde o macOS 10.14. Nas versões recentes do sistema, ela abre a janela mas **não desenha os campos**, resultando em uma tela inteiramente branca. A ferramenta detecta essa situação e avisa no terminal. Consulte [Solução de problemas](#a-interface-gráfica-abre-em-branco-no-macos).
 
 ---
 
@@ -707,6 +826,7 @@ Vector/
 │   ├── errors.py               Exceções previstas
 │   ├── graph_image.py          Representação visual do grafo
 │   ├── gui.py                  Interface gráfica (tkinter)
+│   ├── logo.py                 Logo: carga do PNG e desenho no Canvas
 │   ├── reachability.py         Busca em profundidade sobre o grafo
 │   ├── version.py              Versão da PoC
 │   ├── vex.py                  Classificação e declaração VEX própria
@@ -715,10 +835,30 @@ Vector/
 │       ├── base.py             Estrutura comum e busca de arquivos
 │       ├── c_parser.py         Analisador de C (tree-sitter)
 │       └── python_parser.py    Analisador de Python (ast)
+├── assets/                     Logo em SVG e PNG
+├── tools/
+│   └── render_logo.py          Regera os PNGs da logo a partir de logo.py
 ├── cases/                      Códigos-fonte dos casos controlados
-├── data_cves/                       Mapeamentos entre CVEs e funções
+├── data_cves/                  Mapeamentos entre CVEs e funções
 └── results/                    Declarações VEX produzidas
     └── graphs/                 Grafos em PNG e DOT
+```
+
+### Sobre a logo
+
+A logo é usada em três lugares, todos derivados da mesma geometria, declarada em [vector/logo.py](vector/logo.py):
+
+| Onde | Arquivo | Motivo |
+|---|---|---|
+| README | `assets/logo.svg` | O GitHub renderiza SVG, que fica nítido em qualquer zoom |
+| Interface gráfica | `assets/logo-64.png` | O Canvas do Tk não aplica antialiasing no Windows; a imagem tem suavização verdadeira |
+| Alternativa | Desenho no Canvas | Usada quando o PNG não pode ser carregado, como no Tk 8.5 do macOS |
+
+Os PNGs são versionados no repositório. O script `tools/render_logo.py` só é executado quando a logo muda, e por isso o **Pillow não é dependência de execução** da ferramenta:
+
+```bash
+pip install pillow
+python tools/render_logo.py
 ```
 
 A separação entre `analysis.py` e as duas interfaces garante que a linha de comando e a interface gráfica produzam exatamente o mesmo resultado, pois ambas chamam a mesma função.
@@ -780,9 +920,19 @@ Verifique a versão instalada:
 python3 -c "import tkinter; print(tkinter.TkVersion)"
 ```
 
-Se o resultado for `8.5`, instale o Python a partir de [python.org/downloads/macos](https://www.python.org/downloads/macos/), que acompanha o Tk 8.6, e execute a PoC com esse interpretador. A ferramenta avisa no terminal quando detecta uma versão insuficiente.
+Se o resultado for `8.5`, instale o Python a partir de [python.org/downloads/macos](https://www.python.org/downloads/macos/) e execute a PoC com esse interpretador. Os instaladores atuais acompanham o Tk 8.6 ou 9.0, e ambos funcionam. A ferramenta avisa no terminal quando detecta uma versão insuficiente.
 
 A análise pela linha de comando não é afetada e funciona normalmente com qualquer uma das versões.
+
+### A janela abre, mas sem o tema escuro
+
+O `ttkbootstrap` não está instalado no interpretador em uso, ou o tema não pôde ser aplicado. A interface funciona normalmente com o tema padrão; para obter o tema escuro:
+
+```bash
+pip install ttkbootstrap
+```
+
+Confirme que está usando o mesmo interpretador em que instalou o pacote — é comum instalar em um Python e executar com outro. Se a aplicação do tema falhar, o motivo aparece no terminal ao abrir a janela.
 
 ### `Incompatible Language version`
 

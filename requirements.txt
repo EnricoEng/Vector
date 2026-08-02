@@ -14,3 +14,13 @@ graphviz==0.21
 # "Incompatible Language version".
 tree-sitter==0.23.2
 tree-sitter-c==0.23.4
+
+# Tema moderno para a interface gráfica.
+#
+# Dependência opcional. Sem ela, a janela usa o tema "clam" do próprio
+# ttk e todas as funcionalidades permanecem idênticas.
+#
+# Exige Tk 8.6 ou superior: o ttkbootstrap desenha seus widgets a partir
+# de imagens PNG, e em versões anteriores a criação da janela falha. A
+# interface detecta essa situação e volta ao tema padrão sozinha.
+ttkbootstrap==1.18.2
