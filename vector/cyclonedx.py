@@ -100,7 +100,10 @@ def build_properties(result):
     # Inicializa a lista de propriedades com os dados sempre presentes.
     properties = [
         as_property("vector:language", evidence["language"]),
-        as_property("vector:entry_point", evidence["entry_point"]),
+        as_property(
+            "vector:entry_points",
+            ", ".join(evidence["entry_points"]),
+        ),
         as_property(
             "vector:vulnerable_function",
             evidence["vulnerable_function"],
@@ -111,7 +114,28 @@ def build_properties(result):
             evidence["function_present"],
         ),
         as_property("vector:residual_risk", result["residual_risk"]),
+        as_property(
+            "vector:analysis_complete",
+            evidence["analysis_complete"],
+        ),
     ]
+
+    # Verifica se a análise deixou chamadas sem resolver.
+    if evidence["unresolved_calls"]:
+
+        # Registra quantas funções contêm trechos não compreendidos.
+        #
+        # A informação importa para quem consome o documento: ela diz
+        # que a conclusão sobre alcançabilidade tem cobertura parcial.
+        properties.append(
+            as_property(
+                "vector:unresolved_calls",
+                "; ".join(
+                    f"{item['function']}: {len(item['details'])}"
+                    for item in evidence["unresolved_calls"]
+                ),
+            )
+        )
 
     # Verifica se existe um caminho de alcançabilidade.
     if evidence["call_path"]:

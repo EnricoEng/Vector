@@ -55,14 +55,16 @@ WRAPPER_DECLARATORS = {
 # Define os tipos de nó que envolvem a expressão chamada sem alterar
 # o identificador que interessa à análise.
 #
-# Exemplos:
+# Exemplo:
 #
 #     (*ponteiro_de_funcao)(argumento)
-#     tabela[indice](argumento)
+#
+# A indexação, como tabela[indice](), não aparece aqui porque recebe
+# tratamento próprio: quando a tabela é conhecida, a chamada é resolvida
+# para todas as funções que ela contém.
 WRAPPER_EXPRESSIONS = {
     "parenthesized_expression",
     "pointer_expression",
-    "subscript_expression",
 }
 
 
@@ -208,22 +210,159 @@ def declarator_name(node, source_bytes):
     return None
 
 
-# Define a função que obtém o nome da função chamada.
-def call_target_name(node, source_bytes):
+# Define a função que percorre a árvore reunindo os nomes de função.
+def collect_function_names(node, source_bytes, names):
     """
-    Extrai o nome da função chamada por uma expressão.
+    Acrescenta a "names" o nome de toda função definida na árvore.
+
+    A coleta ocorre antes da construção das arestas porque decidir se
+    uma variável guarda uma função exige conhecer previamente todas as
+    funções do projeto, inclusive as declaradas em outros arquivos.
+    """
+
+    # Verifica se o nó representa a definição de uma função.
+    if node.type == "function_definition":
+
+        # Obtém o nome a partir do declarador.
+        name = declarator_name(
+            node.child_by_field_name("declarator"),
+            source_bytes,
+        )
+
+        # Registra o nome quando ele foi identificado.
+        if name is not None:
+            names.add(name)
+
+    # Percorre os demais nós da árvore.
+    for child in node.children:
+        collect_function_names(child, source_bytes, names)
+
+
+# Define a função que extrai nomes de função de uma expressão.
+def function_names_in(node, source_bytes, known_functions):
+    """
+    Devolve os nomes de função referenciados por uma expressão.
+
+    Reconhece o identificador isolado e as listas de inicialização,
+    usadas para montar tabelas de ponteiros de função:
+
+        acao = vulnerable_function
+        TABELA[] = { vulnerable_function, outra }
+    """
+
+    # Interrompe quando não há nó a examinar.
+    if node is None:
+        return []
+
+    # Verifica se a expressão é um identificador.
+    if node.type == "identifier":
+
+        # Obtém o texto do identificador.
+        name = node_text(node, source_bytes)
+
+        # Devolve o nome apenas quando ele é uma função conhecida.
+        return [name] if name in known_functions else []
+
+    # Verifica se a expressão é uma lista de inicialização.
+    if node.type == "initializer_list":
+
+        # Reúne os nomes de função presentes nos elementos.
+        names = []
+        for child in node.children:
+            names.extend(
+                function_names_in(child, source_bytes, known_functions)
+            )
+        return names
+
+    # Verifica se o elemento é um par de inicialização designada,
+    # como em [0] = vulnerable_function.
+    if node.type == "initializer_pair":
+
+        # Examina apenas o valor do par.
+        return function_names_in(
+            node.child_by_field_name("value"),
+            source_bytes,
+            known_functions,
+        )
+
+    # Devolve uma lista vazia para as demais expressões.
+    return []
+
+
+# Define a função que reúne as variáveis que guardam funções.
+def collect_bindings(node, source_bytes, known_functions, aliases, containers):
+    """
+    Preenche duas tabelas a partir das declarações com inicialização:
+
+    - aliases: variável que recebe uma única função;
+    - containers: variável que recebe uma coleção de funções.
+
+    Exemplos:
+
+        handler_t acao = vulnerable_function;
+        static handler_t TABELA[] = { vulnerable_function, outra };
+    """
+
+    # Verifica se o nó é uma declaração com valor inicial.
+    if node.type == "init_declarator":
+
+        # Obtém o nome declarado.
+        name = declarator_name(
+            node.child_by_field_name("declarator"),
+            source_bytes,
+        )
+
+        # Obtém o valor atribuído.
+        value = node.child_by_field_name("value")
+
+        # Prossegue apenas quando os dois foram identificados.
+        if name is not None and value is not None:
+
+            # Obtém as funções presentes no valor.
+            names = function_names_in(
+                value,
+                source_bytes,
+                known_functions,
+            )
+
+            # Executa quando o valor é uma única função.
+            if names and value.type == "identifier":
+
+                # Registra o apelido da função.
+                aliases[name] = names[0]
+
+            # Executa quando o valor é uma coleção de funções.
+            elif names:
+
+                # Registra todas as funções da coleção.
+                containers[name] = names
+
+    # Percorre os demais nós da árvore.
+    for child in node.children:
+        collect_bindings(
+            child,
+            source_bytes,
+            known_functions,
+            aliases,
+            containers,
+        )
+
+
+# Define a função que resolve a expressão chamada.
+def resolve_call(node, source_bytes, aliases, containers, result, caller):
+    """
+    Devolve a lista de funções que uma expressão pode chamar.
 
     Exemplos e resultados:
 
-    process()              -> process
-    objeto.processa()      -> processa
-    ponteiro->processa()   -> processa
-    (*callback)()          -> callback
+    process()              -> ["process"]
+    objeto.processa()      -> ["processa"]
+    ponteiro->processa()   -> ["processa"]
+    (*acao)()              -> a função guardada em acao, quando conhecida
+    TABELA[i]()            -> todas as funções da tabela, quando conhecida
 
-    Chamadas indiretas por ponteiro de função são registradas pelo nome
-    da variável que armazena o ponteiro. A PoC não resolve qual função
-    o ponteiro realmente aponta em tempo de execução, o que constitui
-    uma limitação conhecida da análise.
+    Devolve uma lista vazia quando a expressão não pôde ser resolvida,
+    registrando o trecho em result.unresolved.
     """
 
     # Percorre a árvore enquanto houver um nó a examinar.
@@ -234,8 +373,23 @@ def call_target_name(node, source_bytes):
         # Exemplo: process()
         if node.type == "identifier":
 
+            # Obtém o texto do identificador.
+            name = node_text(node, source_bytes)
+
+            # Verifica se é uma variável que guarda uma função.
+            if name in aliases:
+
+                # Resolve para a função guardada na variável.
+                return [aliases[name]]
+
+            # Verifica se é uma tabela de funções.
+            if name in containers:
+
+                # Resolve para todas as funções da tabela.
+                return list(containers[name])
+
             # Retorna o nome da função chamada.
-            return node_text(node, source_bytes)
+            return [name]
 
         # Verifica se a chamada acessa um campo de estrutura.
         #
@@ -252,10 +406,49 @@ def call_target_name(node, source_bytes):
 
                 # Retorna apenas o nome final da chamada, seguindo o
                 # mesmo critério adotado na análise de Python.
-                return node_text(field, source_bytes)
+                return [node_text(field, source_bytes)]
 
-            # Interrompe a busca quando o campo não existe.
-            return None
+            # Registra que a chamada não pôde ser resolvida.
+            result.add_unresolved(
+                caller,
+                f"linha {node.start_point[0] + 1}: acesso a campo sem "
+                f"nome identificável",
+            )
+            return []
+
+        # Verifica se a chamada é feita por índice.
+        #
+        # Exemplo: TABELA[i](requisicao)
+        if node.type == "subscript_expression":
+
+            # Obtém a expressão que está sendo indexada.
+            container = node.child_by_field_name("argument")
+
+            # Usa o primeiro filho nomeado quando o campo não existe.
+            if container is None:
+                named = [c for c in node.children if c.is_named]
+                container = named[0] if named else None
+
+            # Verifica se é uma tabela de funções conhecida.
+            if container is not None and container.type == "identifier":
+                name = node_text(container, source_bytes)
+
+                if name in containers:
+
+                    # Resolve para todas as funções da tabela.
+                    #
+                    # O índice não é avaliado, pois pode ser calculado
+                    # em tempo de execução. Todas as funções da tabela
+                    # são consideradas alcançáveis.
+                    return list(containers[name])
+
+            # Registra que a chamada não pôde ser resolvida.
+            result.add_unresolved(
+                caller,
+                f"linha {node.start_point[0] + 1}: chamada por índice "
+                f"em uma tabela cujo conteúdo não foi identificado",
+            )
+            return []
 
         # Verifica se o nó apenas envolve a expressão real.
         if node.type in WRAPPER_EXPRESSIONS:
@@ -270,8 +463,13 @@ def call_target_name(node, source_bytes):
             # Verifica se existe algum filho a examinar.
             if not named_children:
 
-                # Interrompe a busca.
-                return None
+                # Registra que a chamada não pôde ser resolvida.
+                result.add_unresolved(
+                    caller,
+                    f"linha {node.start_point[0] + 1}: expressão de "
+                    f"chamada vazia",
+                )
+                return []
 
             # Continua a busca pelo primeiro filho nomeado.
             node = named_children[0]
@@ -279,18 +477,67 @@ def call_target_name(node, source_bytes):
             # Reinicia o laço com o novo nó.
             continue
 
-        # Interrompe a busca quando o tipo de nó não é reconhecido.
+        # Registra que a estrutura da chamada não é suportada.
         #
         # É o caso de chamadas cujo alvo é o resultado de outra
         # expressão, como obter_callback()().
-        return None
+        result.add_unresolved(
+            caller,
+            f"linha {node.start_point[0] + 1}: chamada a partir de uma "
+            f"expressão ({node.type}) que a análise não resolve",
+        )
+        return []
 
-    # Retorna None quando a árvore terminou sem encontrar o nome.
-    return None
+    # Retorna uma lista vazia quando a árvore terminou sem resultado.
+    return []
+
+
+# Define a função que registra funções passadas como argumento.
+def record_arguments(node, source_bytes, known_functions, result, caller):
+    """
+    Cria arestas para as funções entregues como argumento.
+
+    Exemplo:
+
+        registrar(vulnerable_function);
+
+    A chamada guarda a função para executá-la depois. A aresta é criada
+    porque a execução é possível, ainda que o momento não seja
+    conhecido.
+    """
+
+    # Obtém a lista de argumentos da chamada.
+    arguments = node.child_by_field_name("arguments")
+
+    # Interrompe quando a chamada não possui argumentos.
+    if arguments is None:
+        return
+
+    # Percorre os argumentos informados.
+    for child in arguments.children:
+
+        # Obtém os nomes de função presentes no argumento.
+        for name in function_names_in(
+            child,
+            source_bytes,
+            known_functions,
+        ):
+
+            # Registra a relação como referência, e não como chamada.
+            result.add_reference(caller, name)
 
 
 # Define a função que percorre a árvore sintática de um arquivo.
-def walk(node, source_bytes, result, source_path, function_stack):
+def walk(
+    node,
+    source_bytes,
+    result,
+    source_path,
+    function_stack,
+    known_functions,
+    aliases,
+    containers,
+):
     """
     Percorre a árvore registrando declarações e chamadas de funções.
 
@@ -328,6 +575,9 @@ def walk(node, source_bytes, result, source_path, function_stack):
                     result,
                     source_path,
                     function_stack,
+                    known_functions,
+                    aliases,
+                    containers,
                 )
 
             # Remove a função da pilha após terminar sua análise.
@@ -349,30 +599,55 @@ def walk(node, source_bytes, result, source_path, function_stack):
             # Obtém a expressão que identifica a função chamada.
             target = node.child_by_field_name("function")
 
-            # Obtém o nome da função chamada.
-            callee = call_target_name(target, source_bytes)
-
-            # Registra a chamada quando o nome foi identificado.
-            if callee is not None:
+            # Resolve a expressão em uma lista de funções.
+            #
+            # A lista possui mais de um item quando a chamada é feita
+            # por uma tabela de ponteiros, situação em que qualquer uma
+            # das funções da tabela pode ser executada.
+            for callee in resolve_call(
+                target,
+                source_bytes,
+                aliases,
+                containers,
+                result,
+                caller,
+            ):
 
                 # Registra a relação no grafo compartilhado.
                 result.add_call(caller, callee)
+
+            # Registra as funções passadas como argumento.
+            record_arguments(
+                node,
+                source_bytes,
+                known_functions,
+                result,
+                caller,
+            )
 
     # Percorre os demais filhos do nó.
     #
     # Isso é necessário para identificar chamadas aninhadas,
     # como primeira(segunda()).
     for child in node.children:
-        walk(child, source_bytes, result, source_path, function_stack)
+        walk(
+            child,
+            source_bytes,
+            result,
+            source_path,
+            function_stack,
+            known_functions,
+            aliases,
+            containers,
+        )
 
 
 # Define a função que analisa um único arquivo C.
-def analyze_file(source_path, result, parser):
+def parse_file(source_path, parser):
     """
-    Analisa um arquivo C e acumula o resultado em "result".
+    Lê um arquivo C e devolve a árvore sintática e os bytes lidos.
 
-    Devolve True quando o tree-sitter encontrou trechos que não pôde
-    reconhecer, o que indica cobertura parcial do arquivo.
+    Levanta ParseError quando o tree-sitter falha.
     """
 
     # Lê o conteúdo do arquivo como texto.
@@ -395,20 +670,8 @@ def analyze_file(source_path, result, parser):
             f"Não foi possível analisar {source_path}: {error}"
         ) from error
 
-    # Percorre a árvore a partir do nó raiz.
-    walk(
-        tree.root_node,
-        source_bytes,
-        result,
-        source_path,
-        [],
-    )
-
-    # Registra o arquivo como analisado com sucesso.
-    result.sources.append(str(source_path))
-
-    # Informa se a árvore contém trechos não reconhecidos.
-    return tree.root_node.has_error
+    # Devolve a árvore e os bytes correspondentes.
+    return tree, source_bytes
 
 
 # Define a função que analisa um arquivo ou uma pasta de código C.
@@ -441,17 +704,23 @@ def analyze(path):
     # Cria a estrutura que acumulará o resultado da análise.
     result = CallGraphResult(language="c")
 
-    # Percorre os arquivos encontrados.
+    # Inicializa a lista de árvores já convertidas.
+    trees = []
+
+    # Primeira leitura: converte cada arquivo em árvore sintática.
     for source_file in source_files:
 
         # Inicia o tratamento de erros individuais.
         try:
 
-            # Analisa o arquivo atual.
-            has_error = analyze_file(source_file, result, parser)
+            # Converte o arquivo em árvore.
+            tree, source_bytes = parse_file(source_file, parser)
+
+            # Guarda a árvore para as passagens seguintes.
+            trees.append((source_file, tree, source_bytes))
 
             # Verifica se o arquivo foi reconhecido apenas em parte.
-            if has_error:
+            if tree.root_node.has_error:
 
                 # Registra o aviso sem descartar o que foi analisado.
                 #
@@ -470,6 +739,45 @@ def analyze(path):
             # Registra a falha sem interromper a análise dos demais
             # arquivos.
             result.add_failure(source_file, str(error))
+
+    # Primeira passagem: reúne os nomes de todas as funções do projeto.
+    known_functions = set()
+    for _, tree, source_bytes in trees:
+        collect_function_names(
+            tree.root_node,
+            source_bytes,
+            known_functions,
+        )
+
+    # Segunda passagem: reúne as variáveis que guardam funções.
+    aliases = {}
+    containers = {}
+    for _, tree, source_bytes in trees:
+        collect_bindings(
+            tree.root_node,
+            source_bytes,
+            known_functions,
+            aliases,
+            containers,
+        )
+
+    # Terceira passagem: constrói as arestas do grafo.
+    for source_file, tree, source_bytes in trees:
+
+        # Percorre a árvore a partir do nó raiz.
+        walk(
+            tree.root_node,
+            source_bytes,
+            result,
+            source_file,
+            [],
+            known_functions,
+            aliases,
+            containers,
+        )
+
+        # Registra o arquivo como analisado com sucesso.
+        result.sources.append(str(source_file))
 
     # Verifica se todos os arquivos falharam.
     if not result.sources:

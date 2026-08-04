@@ -26,8 +26,16 @@ from .graph_image import generate_call_graph_image
 # Importa o seletor de analisador por linguagem.
 from .parsers import analyze as analyze_source
 
-# Importa a análise de alcançabilidade e a validação do ponto de entrada.
-from .reachability import find_reachability_path, validate_entry_point
+# Importa a análise de alcançabilidade e as funções auxiliares que
+# interpretam e validam os pontos de entrada.
+from .reachability import (
+    find_reachability_path,
+    resolve_target,
+    parse_entry_points,
+    reachable_functions,
+    unresolved_in_reach,
+    validate_entry_points,
+)
 
 # Importa a classificação e a montagem da declaração VEX.
 from .vex import (
@@ -160,11 +168,94 @@ def run_analysis(
         # Informa o aviso ao chamador.
         report(f"Aviso: {message}")
 
-    # Valida o ponto de entrada informado.
+    # Interpreta o valor informado como ponto de entrada.
+    #
+    # O valor pode nomear uma função, várias separadas por vírgula, ou
+    # o caractere "*", que seleciona todas as candidatas encontradas.
+    entry_points = parse_entry_points(entry_point, static_analysis)
+
+    # Valida os pontos de entrada obtidos.
     #
     # A validação ocorre antes da leitura das CVEs para que o analista
     # receba o erro mais provável primeiro.
-    validate_entry_point(static_analysis, entry_point)
+    validate_entry_points(static_analysis, entry_points)
+
+    # Informa quais pontos de entrada serão utilizados.
+    report(f"Pontos de entrada: {', '.join(entry_points)}")
+
+    # Verifica se existem funções decoradas fora do alcance escolhido.
+    #
+    # Uma função decorada é chamada por um framework, e não pelo código
+    # analisado. Se ela não estiver entre os pontos de entrada nem for
+    # alcançável a partir deles, existe um trecho executável do programa
+    # que a análise simplesmente não visitou.
+    ignored_decorated = [
+        name
+        for name in static_analysis.decorated
+        if name not in reachable_functions(
+            static_analysis.graph,
+            entry_points,
+        )
+    ]
+
+    # Verifica se alguma função decorada ficou de fora.
+    if ignored_decorated:
+
+        # Monta a mensagem do aviso.
+        message = (
+            f"{len(ignored_decorated)} função(ões) decorada(s) não "
+            f"são alcançáveis a partir dos pontos de entrada "
+            f"escolhidos: "
+            f"{', '.join(ignored_decorated[:5])}. Funções decoradas "
+            f"costumam ser chamadas por um framework. Considere usar "
+            f"--entry '*' para incluí-las."
+        )
+
+        # Registra o aviso na lista.
+        warnings.append(message)
+
+        # Informa o aviso ao chamador.
+        report(f"Aviso: {message}")
+
+    # Obtém as chamadas que a análise não conseguiu resolver dentro do
+    # trecho alcançável a partir dos pontos de entrada.
+    unresolved = unresolved_in_reach(static_analysis, entry_points)
+
+    # Indica se a análise compreendeu todo o código percorrido.
+    #
+    # Duas situações tornam a análise incompleta:
+    #
+    # 1. chamadas que a ferramenta não conseguiu resolver;
+    # 2. funções decoradas fora do alcance escolhido, que representam
+    #    trechos executáveis que a busca sequer visitou.
+    #
+    # Em ambas, afirmar "não alcançável" seria afirmar mais do que a
+    # análise sustenta.
+    analysis_complete = not unresolved and not ignored_decorated
+
+    # Verifica se existem trechos não compreendidos.
+    if unresolved:
+
+        # Conta quantos trechos ficaram sem resolução.
+        total = sum(len(item["details"]) for item in unresolved)
+
+        # Monta a mensagem do aviso.
+        #
+        # O aviso importa porque impede que a ferramenta afirme
+        # "não alcançável" sobre um programa que ela não compreendeu
+        # por inteiro.
+        message = (
+            f"{total} chamada(s) no trecho alcançável não puderam ser "
+            f"resolvidas. Um resultado de não alcançabilidade não pode "
+            f"ser considerado conclusivo. Funções afetadas: "
+            f"{', '.join(item['function'] for item in unresolved[:5])}."
+        )
+
+        # Registra o aviso na lista.
+        warnings.append(message)
+
+        # Informa o aviso ao chamador.
+        report(f"Aviso: {message}")
 
     # Carrega e valida o arquivo JSON contendo as CVEs.
     vulnerabilities = load_cve_file(cve_file)
@@ -184,19 +275,26 @@ def run_analysis(
         # Informa qual vulnerabilidade está sendo avaliada.
         report(f"Avaliando {cve_id} ({vulnerable_function})")
 
-        # Procura um caminho entre o ponto de entrada
+        # Localiza os nós que correspondem à função vulnerável.
+        #
+        # O arquivo de CVEs informa apenas o nome. Quando ele é ambíguo,
+        # o grafo o armazena qualificado pelo módulo, e a busca precisa
+        # considerar todos os candidatos.
+        targets = resolve_target(graph, vulnerable_function)
+
+        # Procura um caminho entre os pontos de entrada
         # e a função vulnerável.
         path = find_reachability_path(
             graph,
-            entry_point,
-            vulnerable_function,
+            entry_points,
+            targets,
         )
 
         # Define a alcançabilidade com base na existência do caminho.
         is_reachable = path is not None
 
         # Verifica se a função vulnerável existe no código analisado.
-        function_present = vulnerable_function in graph
+        function_present = bool(targets)
 
         # Verifica se a função sequer aparece no código.
         if not function_present:
@@ -221,7 +319,7 @@ def run_analysis(
         # Gera a representação visual do grafo.
         graph_files = generate_call_graph_image(
             graph=graph,
-            entry_point=entry_point,
+            entry_point=entry_points[0],
             vulnerable_function=vulnerable_function,
             reachability_path=path,
             cve_id=cve_id,
@@ -259,13 +357,21 @@ def run_analysis(
             )
 
         # Classifica a vulnerabilidade.
-        classification = classify_vulnerability(is_reachable, assessment)
+        #
+        # O terceiro argumento informa se a análise compreendeu todo o
+        # trecho percorrido. Quando não compreendeu, a ausência de
+        # caminho deixa de sustentar a justificativa code_not_reachable.
+        classification = classify_vulnerability(
+            is_reachable,
+            assessment,
+            analysis_complete,
+        )
 
         # Cria o registro das evidências utilizadas.
         evidence = {
             "analysis_type": "static_call_graph",
             "language": static_analysis.language,
-            "entry_point": entry_point,
+            "entry_points": entry_points,
             "vulnerable_function": vulnerable_function,
             "function_present": function_present,
             "declared_in": static_analysis.declarations.get(
@@ -275,6 +381,8 @@ def run_analysis(
             "reachable": is_reachable,
             "call_path": path,
             "manual_assessment": assessment,
+            "analysis_complete": analysis_complete,
+            "unresolved_calls": unresolved,
             "call_graph_dot": graph_files["dot_file"],
             "call_graph_image": graph_files["image_file"],
         }
@@ -302,7 +410,7 @@ def run_analysis(
         product_name=product_name,
         product_version=product_version,
         source_file=str(source),
-        entry_point=entry_point,
+        entry_point=", ".join(entry_points),
         analysis_results=analysis_results,
         language=static_analysis.language,
         analyzed_files=static_analysis.sources,

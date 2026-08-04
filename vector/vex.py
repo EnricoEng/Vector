@@ -138,11 +138,18 @@ def load_cve_file(file_path):
 
 
 # Define a função responsável por classificar a vulnerabilidade.
-def classify_vulnerability(reachable, assessment=None):
+def classify_vulnerability(
+    reachable,
+    assessment=None,
+    analysis_complete=True,
+):
     """
     Classifica uma vulnerabilidade usando a seguinte lógica:
 
-    1. Não alcançável:
+    0. Não alcançável, mas a análise não compreendeu todo o código
+       percorrido: UNDER_INVESTIGATION / in_triage.
+
+    1. Não alcançável e análise completa:
        NOT_AFFECTED / code_not_reachable.
 
     2. Alcançável, mas entrada não controlada:
@@ -160,6 +167,35 @@ def classify_vulnerability(reachable, assessment=None):
 
     # Verifica o resultado automático da análise de alcançabilidade.
     if not reachable:
+
+        # Verifica se a análise deixou trechos sem compreender.
+        #
+        # A justificativa code_not_reachable é uma afirmação forte: ela
+        # sustenta que a função vulnerável não pode ser executada. Essa
+        # afirmação só é legítima quando a ferramenta compreendeu todas
+        # as chamadas do trecho percorrido.
+        #
+        # Havendo qualquer chamada não resolvida no alcance, a ausência
+        # de caminho pode ser apenas um limite da análise, e não uma
+        # propriedade do programa. Nesse caso a vulnerabilidade fica em
+        # investigação, e não é declarada como não afetante.
+        if not analysis_complete:
+
+            # Mantém a vulnerabilidade em investigação.
+            return {
+                "product_status": "UNDER_INVESTIGATION",
+                "cyclonedx_state": "in_triage",
+                "justification": None,
+                "response": [],
+                "residual_risk": True,
+                "reason": (
+                    "Não foi identificado caminho até a função "
+                    "vulnerável, mas a análise não conseguiu resolver "
+                    "todas as chamadas do trecho percorrido. A "
+                    "ausência de caminho pode ser um limite da "
+                    "ferramenta, e não uma propriedade do programa."
+                ),
+            }
 
         # Retorna o estado correspondente ao código não alcançável.
         return {

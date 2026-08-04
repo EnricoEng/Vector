@@ -10,7 +10,7 @@
 
 ---
 
-Prova de conceito para triagem de vulnerabilidades baseada em **alcançabilidade de código** (*reachability analysis*), com geração de declarações **VEX** simplificadas.
+Prova de conceito para triagem de vulnerabilidades baseada em **alcançabilidade de código** (*reachability analysis*), com geração de declarações **VEX**.
 
 A ferramenta responde a uma pergunta prática do dia a dia da gestão de vulnerabilidades: *a função vulnerável apontada por uma CVE é realmente alcançável a partir do ponto de entrada da minha aplicação?*
 
@@ -203,6 +203,19 @@ Função vulnerável alcançável?
 | `UNDER_INVESTIGATION` | `in_triage` | Função alcançável, mas a avaliação manual não foi feita ou foi inconclusiva |
 
 O campo `residual_risk` permanece `true` quando a classificação `NOT_AFFECTED` decorre de uma mitigação, e não da ausência de caminho. A distinção importa: uma mitigação pode ser removida em uma alteração futura do código.
+
+### Superaproximação: o que a ferramenta faz quando não entende o código
+
+`code_not_reachable` é uma **afirmação forte**: sustenta que a função vulnerável não pode ser executada. Essa afirmação só é legítima quando a análise compreendeu todas as chamadas do trecho percorrido.
+
+Por isso, a ausência de um caminho **não é suficiente** para emitir essa justificativa. A ferramenta só a emite quando a análise foi completa. Duas situações a tornam incompleta:
+
+1. **chamadas não resolvidas** no trecho alcançável — uma chamada por expressão, uma tabela cujo conteúdo não foi identificado;
+2. **funções decoradas fora do alcance** dos pontos de entrada escolhidos, que representam trechos executáveis que a busca sequer visitou.
+
+Em qualquer uma delas, o resultado passa a ser `UNDER_INVESTIGATION`, com o motivo registrado em `analysis_scope.warnings` e o detalhamento em `evidence.unresolved_calls`.
+
+O critério é assimétrico de propósito. Um falso positivo custa tempo do analista; um falso negativo declara "não afetado" sobre algo explorável. Diante da dúvida, a ferramenta prefere investigar.
 
 ---
 
@@ -531,11 +544,25 @@ Declaração VEX salva em: results/case1-vex.json
 | `--product` | Sim | — | Nome do produto analisado |
 | `--version` | Sim | — | Versão do produto analisado |
 | `--output` | Sim | — | Arquivo JSON que receberá a declaração VEX |
-| `--entry` | Não | `main` | Função usada como ponto de entrada |
+| `--entry` | Não | `main` | Ponto(s) de entrada: uma função, várias separadas por vírgula, ou `*` para todas as candidatas |
 | `--language` | Não | detectar | Linguagem do código: `python` ou `c` |
 | `--format` | Não | `poc` | Formato da declaração: `poc`, `cyclonedx` ou `ambos` |
 | `--graphs` | Não | `results/graphs` | Pasta que receberá os grafos gerados |
 | `--manual` | Não | desativado | Ativa a avaliação de explorabilidade para funções alcançáveis |
+
+### Escolha dos pontos de entrada
+
+Aplicações reais raramente possuem um único ponto de entrada: cada rota de um servidor e cada subcomando de uma ferramenta é um começo possível de execução. Analisar apenas um deles subestima o alcance da vulnerabilidade.
+
+| Valor | Efeito |
+|---|---|
+| `main` | Um único ponto de entrada |
+| `main,tratar_requisicao` | Vários pontos, alcançável a partir de qualquer um deles |
+| `*` | Todas as candidatas: as raízes do grafo mais as funções decoradas |
+
+O valor `*` é o mais adequado para código de aplicação real. Ele inclui as **funções decoradas**, que são registradas em um framework e chamadas por ele — em um servidor web, o tratador de uma rota nunca aparece como destino de chamada no código da aplicação, mas é executado a cada acesso.
+
+Quando existem funções decoradas fora do alcance escolhido, a ferramenta emite um aviso e passa a tratar a análise como incompleta.
 
 ### Escolha do formato de saída
 
@@ -787,6 +814,60 @@ O diretório `cases/` contém casos que demonstram cada resultado possível. Os 
 | 3 | `case3_alcancavel_mitigado.py` | Python | entrada: `s`, mitigação: `s` | `NOT_AFFECTED` / `protected_by_mitigating_control` |
 | 4 | `case4_c_alcancavel_exploravel.c` | C | entrada: `s`, mitigação: `n` | `AFFECTED` |
 | 5 | `case5_c_nao_alcancavel.c` | C | não perguntadas | `NOT_AFFECTED` / `code_not_reachable` |
+| 6 | `ProjetoTestC/` (pasta) | C | entrada: `s`, mitigação: `n` | `AFFECTED` |
+| 7 | `ProjetoTestPython/` (pasta) | Python | entrada: `s`, mitigação: `n` | `AFFECTED` |
+
+### Caso 6 — Projeto com vários arquivos
+
+Os cinco primeiros casos são arquivos isolados. O caso 6 valida a análise de uma **pasta de projeto**, em que o caminho só existe quando os grafos de todos os arquivos são unidos.
+
+O ponto de entrada está em `src/main.c` e a função vulnerável em `src/exec.c`. O caminho atravessa cinco arquivos diferentes:
+
+```text
+main -> server_start -> router_dispatch -> handler_execute -> run_command -> vulnerable_function
+```
+
+```bash
+python analyzer.py \
+  --source cases/ProjetoTestC \
+  --cves data_cves/caseProjetoTestC.json \
+  --entry main \
+  --product projeto-teste-c \
+  --version 1.0.0 \
+  --output results/projeto-teste-c-vex.json \
+  --manual
+```
+
+O que este caso demonstra fica claro ao comparar os três escopos:
+
+| Escopo analisado | Resultado |
+|---|---|
+| `cases/ProjetoTestC` (pasta) | `AFFECTED`, com o caminho completo |
+| `cases/ProjetoTestC/src/main.c` | `NOT_AFFECTED` — **falso negativo**, acompanhado do aviso de que a função não foi encontrada |
+| `cases/ProjetoTestC/src/exec.c` | Erro: o ponto de entrada `main` não existe nesse arquivo |
+
+O segundo caso é a razão de o aviso `a função '...' não foi encontrada no código analisado` existir: sem ele, um `NOT_AFFECTED` produzido por escopo insuficiente seria indistinguível de um `NOT_AFFECTED` legítimo.
+
+Detalhes da estrutura do projeto estão em [cases/ProjetoTestC/README.md](cases/ProjetoTestC/README.md).
+
+### Caso 7 — Projeto equivalente em Python
+
+O caso 7 reproduz o caso 6 em Python, com os mesmos nomes de função e o mesmo caminho, mudando apenas a linguagem e a construção insegura, que passa a ser `eval()`.
+
+A equivalência é proposital: ela permite comparar diretamente o analisador de Python, baseado no módulo `ast`, com o de C, baseado no `tree-sitter`. Os dois produzem o mesmo caminho, o que evidencia que a diferença entre as linguagens está apenas na etapa de análise sintática.
+
+```bash
+python analyzer.py \
+  --source cases/ProjetoTestPython \
+  --cves data_cves/caseProjetoTestPython.json \
+  --entry main \
+  --product projeto-teste-python \
+  --version 1.0.0 \
+  --output results/projeto-teste-python-vex.json \
+  --manual
+```
+
+Detalhes em [cases/ProjetoTestPython/README.md](cases/ProjetoTestPython/README.md).
 
 Os casos 1 e 4 reproduzem a mesma cadeia de chamadas em linguagens diferentes, o que permite comparar diretamente o comportamento dos dois analisadores sintáticos:
 
@@ -871,20 +952,35 @@ Os arquivos `analyzer_1th_version.py` e `analyzer_2th_version.py` preservam vers
 
 A PoC implementa uma análise estática simplificada e possui limitações que precisam ser consideradas na leitura dos resultados.
 
-### Gerais
+### O que a ferramenta resolve
 
-- não resolve importações entre diferentes módulos;
-- não resolve chamadas dinâmicas;
-- não analisa reflexão;
-- não resolve funções passadas como argumentos;
+| Construção | Como é tratada |
+|---|---|
+| Chamada direta, `funcao()` | Resolvida |
+| Chamada por atributo, `objeto.metodo()` | Resolvida pelo nome final |
+| Variável que guarda uma função, `acao = f; acao()` | Resolvida para `f` |
+| Função passada como argumento, `registrar(f)` | Aresta de referência para `f` |
+| Tabela de despacho, `ROTAS["x"]()` | Arestas para **todas** as funções da tabela |
+| Ponteiro de função em C, `handler_t a = f; a()` | Resolvida para `f` |
+| Tabela de ponteiros em C, `TABELA[i]()` | Arestas para todas as funções da tabela |
+| Função decorada | Tratada como ponto de entrada adicional |
+| Homônimos em módulos diferentes (Python) | Desambiguados pela importação |
+
+As tabelas de despacho e as referências são **superaproximações**: a ferramenta não avalia qual entrada da tabela será usada nem se a função guardada chegará a ser chamada, e considera todas alcançáveis.
+
+### O que continua fora do alcance
+
+- não analisa reflexão nem chamadas montadas em tempo de execução (`getattr`, `eval`, `importlib`);
 - não resolve polimorfismo ou métodos sobrescritos;
-- não diferencia funções homônimas em módulos ou classes diferentes;
-- não analisa *decorators* ou *monkey patching*;
+- não diferencia métodos homônimos de classes diferentes;
+- não analisa *monkey patching*;
 - não interpreta código nativo ou bibliotecas compiladas;
 - não executa análise de fluxo de dados;
 - não verifica se um caminho é logicamente viável em tempo de execução;
 - não determina automaticamente se a entrada é controlada pelo atacante;
 - não valida automaticamente a efetividade da mitigação informada.
+
+As chamadas que se enquadram no primeiro item são registradas em `evidence.unresolved_calls` e impedem a emissão de `code_not_reachable`, conforme descrito em [Superaproximação](#superaproximação-o-que-a-ferramenta-faz-quando-não-entende-o-código).
 
 ### Específicas da análise de C
 
@@ -896,9 +992,17 @@ A PoC implementa uma análise estática simplificada e possui limitações que p
 
 ### Projetos com vários arquivos
 
-Ao analisar uma pasta, os grafos de todos os arquivos são unidos e as funções são identificadas apenas pelo nome. Duas funções homônimas declaradas em arquivos diferentes são tratadas como uma só, o que pode criar um caminho de alcançabilidade inexistente no programa real.
+Ao analisar uma pasta, os grafos de todos os arquivos são unidos e as funções são identificadas pelo nome.
 
-Quando isso é detectado, a ferramenta registra um aviso em `analysis_scope.warnings`, informando quais funções foram afetadas. O mesmo campo registra os arquivos que não puderam ser analisados ou que foram reconhecidos apenas em parte.
+Quando o mesmo nome é declarado em módulos diferentes, o nó do grafo passa a ser qualificado, como `executor.processar`. A escolha do módulo segue esta ordem:
+
+1. o módulo de onde o arquivo importou o nome, quando há `from X import Y`;
+2. o próprio módulo, quando ele declara a função;
+3. todos os candidatos, quando nada permite decidir.
+
+A desambiguação por importação só existe em Python, pois depende dos nós `Import`/`ImportFrom` do `ast`. Em C, funções homônimas continuam sendo tratadas como uma só, e o aviso correspondente é registrado em `analysis_scope.warnings`.
+
+Módulos são identificados pelo nome do arquivo sem extensão, de modo que dois arquivos com o mesmo nome em pastas diferentes ainda colidem.
 
 ### Interpretação dos resultados
 

@@ -1309,13 +1309,17 @@ class AnalyzerWindow(ttk.Frame):
         #
         # As candidatas aparecem primeiro, seguidas das demais funções
         # declaradas, para que o analista possa escolher qualquer uma.
-        options = suggestions + [
+        options = ["*"] + suggestions + [
             name
             for name in result.functions
             if name not in suggestions
         ]
 
         # Preenche a caixa de seleção com as opções encontradas.
+        #
+        # A primeira opção, "*", seleciona todas as candidatas de uma
+        # vez, incluindo as funções decoradas, que são chamadas por um
+        # framework e não pelo código analisado.
         self.entry_point_box["values"] = options
 
         # Informa o resultado da detecção no registro.

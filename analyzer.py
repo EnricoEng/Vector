@@ -264,7 +264,12 @@ def build_parser():
     parser.add_argument(
         "--entry",
         default="main",
-        help="Ponto de entrada. Padrão: main.",
+        help=(
+            "Ponto de entrada da análise. Aceita uma função, várias "
+            "separadas por vírgula, ou '*' para usar todas as "
+            "candidatas encontradas no código, incluindo as funções "
+            "decoradas. Padrão: main."
+        ),
     )
 
     # Adiciona o argumento que informa o nome do produto.

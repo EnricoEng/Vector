@@ -69,6 +69,38 @@ class CallGraphResult:
     # [{"source": "src/quebrado.py", "error": "unexpected indent"}]
     failures: list = field(default_factory=list)
 
+    # Armazena as chamadas que não puderam ser resolvidas.
+    #
+    # A chave é a função que contém a chamada, e o valor é a lista de
+    # descrições dos trechos não compreendidos.
+    #
+    # Exemplo:
+    #
+    # {"main": ["chamada por expressão em obter_callback()()"]}
+    #
+    # Este registro é o que sustenta a superaproximação: quando existe
+    # uma chamada não resolvida no caminho explorado, a ausência de um
+    # caminho até a função vulnerável deixa de ser conclusiva, porque a
+    # análise não compreendeu tudo o que o programa faz.
+    unresolved: dict = field(default_factory=dict)
+
+    # Armazena as funções que possuem decorador.
+    #
+    # Uma função decorada é registrada por um framework e chamada por
+    # ele, e não pelo código analisado. Por isso ela é tratada como um
+    # ponto de entrada adicional.
+    decorated: list = field(default_factory=list)
+
+    # Armazena as arestas obtidas por referência, e não por chamada
+    # direta.
+    #
+    # Exemplo: uma função passada como argumento ou guardada em um
+    # dicionário. A relação é registrada porque a função pode ser
+    # chamada depois, mas o momento da chamada não é conhecido.
+    #
+    # Cada item é uma tupla (chamador, chamada).
+    references: list = field(default_factory=list)
+
     # Define uma propriedade que retorna as funções declaradas,
     # em ordem alfabética.
     @property
@@ -126,6 +158,53 @@ class CallGraphResult:
         # Isso permite visualizar funções externas, como printf(),
         # que são chamadas mas não declaradas no código analisado.
         self.graph.setdefault(callee, [])
+
+    # Define o método que registra uma referência a uma função.
+    def add_reference(self, caller, callee):
+        """
+        Registra que uma função foi referenciada dentro de outra.
+
+        A referência ocorre quando o nome de uma função aparece sem
+        parênteses, como em register(tratador) ou {"run": tratador}. O
+        programa guardou a função para chamá-la em outro momento.
+
+        A aresta é criada porque, do ponto de vista da alcançabilidade,
+        referenciar uma função é evidência suficiente de que ela pode
+        ser executada. Trata-se de uma superaproximação deliberada: é
+        preferível investigar um caminho que talvez não ocorra a deixar
+        de apontar um que ocorre.
+        """
+
+        # Registra a relação no grafo, como qualquer outra chamada.
+        self.add_call(caller, callee)
+
+        # Guarda a origem da aresta, permitindo distingui-la de uma
+        # chamada direta na exibição do resultado.
+        if (caller, callee) not in self.references:
+            self.references.append((caller, callee))
+
+    # Define o método que registra uma chamada não compreendida.
+    def add_unresolved(self, caller, description):
+        """
+        Registra que uma chamada não pôde ser associada a uma função.
+        """
+
+        # Obtém a lista de trechos já registrados para essa função.
+        entries = self.unresolved.setdefault(caller, [])
+
+        # Evita registrar a mesma descrição mais de uma vez.
+        if description not in entries:
+            entries.append(description)
+
+    # Define o método que registra uma função decorada.
+    def mark_decorated(self, function_name):
+        """
+        Registra que uma função possui decorador.
+        """
+
+        # Evita registrar a mesma função mais de uma vez.
+        if function_name not in self.decorated:
+            self.decorated.append(function_name)
 
     # Define o método que registra a falha de um arquivo.
     def add_failure(self, source_path, message):
