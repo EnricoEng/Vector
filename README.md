@@ -234,7 +234,10 @@ O campo `residual_risk` permanece `true` quando a classificação `NOT_AFFECTED`
 Por isso, a ausência de um caminho **não é suficiente** para emitir essa justificativa. A ferramenta só a emite quando a análise foi completa. Duas situações a tornam incompleta:
 
 1. **chamadas não resolvidas** no trecho alcançável — uma chamada por expressão, uma tabela cujo conteúdo não foi identificado;
-2. **funções decoradas fora do alcance** dos pontos de entrada escolhidos, que representam trechos executáveis que a busca sequer visitou.
+2. **funções decoradas fora do alcance** dos pontos de entrada escolhidos, que representam trechos executáveis que a busca sequer visitou;
+3. **arquivos reconhecidos apenas em parte**, cujos trechos não compreendidos podem conter chamadas que nunca entraram no grafo.
+
+A terceira é frequente em código real: macros não expandidas, como `LIBXML_ATTR_FORMAT(3,0)` na declaração de uma função, impedem o analisador de reconhecer o trecho. No [Caso 8](#caso-8--componente-real-função-vulnerável-ausente-do-build), 69 dos 78 arquivos do libxml2 são lidos apenas em parte por esse motivo.
 
 Em qualquer uma delas, o resultado passa a ser `UNDER_INVESTIGATION`, com o motivo registrado em `analysis_scope.warnings` e o detalhamento em `evidence.unresolved_calls`.
 
@@ -868,6 +871,7 @@ O diretório `cases/` contém casos que demonstram cada resultado possível. Os 
 | 6 | `ProjetoTestC/` (pasta) | C | entrada: `s`, mitigação: `n` | `AFFECTED` |
 | 7 | `ProjetoTestPython/` (pasta) | Python | entrada: `s`, mitigação: `n` | `AFFECTED` |
 | 8 | `SF-529088_Projeto_libxml2/` (pasta) | C++ e C | ausência confirmada | `NOT_AFFECTED` / `code_not_present` |
+| 9 | `CVE-2022-49043_libxml2_Alcancavel/` (pasta) | C++ e C | entrada: `s`, mitigação: `n` | `AFFECTED` |
 
 ### Caso 6 — Projeto com vários arquivos
 
@@ -927,7 +931,9 @@ Os casos anteriores usam CVEs fictícias e código escrito para o teste. O caso 
 
 A vulnerabilidade é a [CVE-2022-49043](https://nvd.nist.gov/vuln/detail/CVE-2022-49043): um *use-after-free* em `xmlXIncludeAddNode`, no arquivo `xinclude.c` do libxml2 anterior à versão 2.11.0.
 
-O caso contém 27 arquivos `.c` do libxml2 e 32 arquivos `.cc` do Blink, obtidos por clone esparso do repositório `qtwebengine-chromium`. Do libxml2 foram copiados **apenas os arquivos que o `BUILD.gn` compila**: o escopo da análise deve ser o escopo da compilação, pois código não compilado não existe no binário.
+A versão do libxml2 embutida é a **2.9.12**, dentro da faixa afetada: um SCA baseado apenas em número de versão classificaria o produto como vulnerável. É exatamente o cenário em que a análise de alcançabilidade se justifica.
+
+O caso contém 27 arquivos `.c` do libxml2 e 32 arquivos `.cc` do Blink, obtidos no **commit exato** que a versão 5.15.12 fixa para o submódulo Chromium (`e0fd3a5d`, de dezembro de 2022), e não no estado atual da branch — que já teve o libxml2 atualizado para a 2.11.0, corrigida. Do libxml2 foram copiados **apenas os arquivos que o `BUILD.gn` compila**: o escopo da análise deve ser o escopo da compilação, pois código não compilado não existe no binário.
 
 #### Análise em dois estágios
 
@@ -958,10 +964,11 @@ Estado VEX: NOT_AFFECTED
 Justificativa: code_not_present
 ```
 
-A função vulnerável **não existe no produto**. Quatro evidências independentes sustentam a resposta afirmativa à pergunta sobre a ausência:
+A função vulnerável **não existe no produto**, apesar de a versão ser afetada. As evidências independentes sustentam a resposta afirmativa à pergunta sobre a ausência:
 
 | # | Evidência | Onde |
 |---|---|---|
+| 0 | `CPEPrefix: cpe:/a:xmlsoft:libxml2:2.9.12` — versão afetada | `README.chromium` |
 | 1 | `#"src/xinclude.c",` — comentado, fora do build | `BUILD.gn` |
 | 2 | "Delete various unused files" — o arquivo não está na cópia | `README.chromium` |
 | 3 | `#if 0` em torno de `#define LIBXML_XINCLUDE_ENABLED`, nas três plataformas | `win32/`, `mac/`, `linux/` |
@@ -972,6 +979,31 @@ A terceira evidência resolve uma contradição aparente: o `xmlreader.c` **é**
 Este é o caso que motivou a justificativa `code_not_present`. Ela é mais forte que `code_not_reachable`: não se trata de uma função que existe e não é chamada, e sim de uma função que não está no binário.
 
 Detalhes, comandos de obtenção do código e licenças em [cases/SF-529088_Projeto_libxml2/README.md](cases/SF-529088_Projeto_libxml2/README.md).
+
+### Caso 9 — O mesmo componente, agora afetado
+
+O caso 9 é o espelho do caso 8: **mesma biblioteca, mesma versão 2.9.12, mesma CVE**. Muda apenas a configuração de compilação.
+
+O `xinclude.c` foi acrescentado a partir do repositório upstream do libxml2, no commit que corresponde à versão embutida, habilitado no `BUILD.gn` e na configuração de plataforma. Do lado do consumidor, um único arquivo novo chama `xmlXIncludeProcess`, reproduzindo um integrador que decidisse ativar o recurso.
+
+| Caso | Configuração | Resultado |
+|---|---|---|
+| 8 | XInclude desabilitado, como no Chromium real | `NOT_AFFECTED` / `code_not_present` |
+| 9 | XInclude habilitado e utilizado | **`AFFECTED`** / `exploitable` |
+
+O caminho encontrado atravessa sete funções, todas dentro do `xinclude.c` real:
+
+```text
+xmlXIncludeProcess -> xmlXIncludeProcessFlags -> xmlXIncludeProcessFlagsData
+  -> xmlXIncludeProcessTreeFlagsData -> xmlXIncludeDoProcess
+    -> xmlXIncludePreProcessNode -> xmlXIncludeAddNode
+```
+
+Esse encadeamento não foi escrito para o teste: é a estrutura interna do libxml2 2.9.12, descoberta pela análise.
+
+Os dois casos juntos separam duas perguntas que um SCA baseado em versão trata como uma só: *o produto contém uma dependência com CVE conhecida?* — sim, em ambos; *o produto é afetado por ela?* — depende de como foi construído.
+
+Detalhes em [cases/CVE-2022-49043_libxml2_Alcancavel/README.md](cases/CVE-2022-49043_libxml2_Alcancavel/README.md).
 
 Os casos 1 e 4 reproduzem a mesma cadeia de chamadas em linguagens diferentes, o que permite comparar diretamente o comportamento dos dois analisadores sintáticos:
 
@@ -1023,6 +1055,7 @@ Vector/
 │       └── python_parser.py    Analisador de Python (ast)
 ├── assets/                     Logo em SVG e PNG
 ├── tools/
+│   ├── derive_entry_points.py  Deriva pontos de entrada de quem consome a biblioteca
 │   └── render_logo.py          Regera os PNGs da logo a partir de logo.py
 ├── cases/                      Códigos-fonte dos casos controlados
 ├── data_cves/                  Mapeamentos entre CVEs e funções

@@ -230,11 +230,17 @@ def run_analysis(
     #
     # 1. chamadas que a ferramenta não conseguiu resolver;
     # 2. funções decoradas fora do alcance escolhido, que representam
-    #    trechos executáveis que a busca sequer visitou.
+    #    trechos executáveis que a busca sequer visitou;
+    # 3. arquivos reconhecidos apenas em parte, cujos trechos não
+    #    compreendidos podem conter chamadas que não entraram no grafo.
     #
-    # Em ambas, afirmar "não alcançável" seria afirmar mais do que a
+    # Em todas, afirmar "não alcançável" seria afirmar mais do que a
     # análise sustenta.
-    analysis_complete = not unresolved and not ignored_decorated
+    analysis_complete = (
+        not unresolved
+        and not ignored_decorated
+        and not static_analysis.partial
+    )
 
     # Verifica se existem trechos não compreendidos.
     if unresolved:

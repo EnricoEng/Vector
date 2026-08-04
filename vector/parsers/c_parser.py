@@ -783,7 +783,7 @@ def analyze_tree_sitter(
                 #
                 # Trechos não reconhecidos são comuns quando o código
                 # depende de macros definidas em cabeçalhos ausentes.
-                result.add_failure(
+                result.add_partial(
                     source_file,
                     "Arquivo analisado parcialmente: há trechos que o "
                     "analisador não reconheceu, possivelmente por "

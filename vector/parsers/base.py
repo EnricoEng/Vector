@@ -84,6 +84,15 @@ class CallGraphResult:
     # análise não compreendeu tudo o que o programa faz.
     unresolved: dict = field(default_factory=dict)
 
+    # Armazena os arquivos reconhecidos apenas em parte.
+    #
+    # Um arquivo parcialmente reconhecido produz um grafo incompleto:
+    # as funções e chamadas do trecho não compreendido simplesmente não
+    # existem no resultado. Como isso pode esconder um caminho até a
+    # função vulnerável, o registro alimenta a mesma superaproximação
+    # aplicada às chamadas não resolvidas.
+    partial: list = field(default_factory=list)
+
     # Armazena as funções que possuem decorador.
     #
     # Uma função decorada é registrada por um framework e chamada por
@@ -205,6 +214,23 @@ class CallGraphResult:
         # Evita registrar a mesma função mais de uma vez.
         if function_name not in self.decorated:
             self.decorated.append(function_name)
+
+    # Define o método que registra um arquivo lido apenas em parte.
+    def add_partial(self, source_path, message):
+        """
+        Registra que um arquivo foi reconhecido apenas em parte.
+
+        O arquivo continua valendo: o que foi compreendido entra no
+        grafo. O registro serve para que a conclusão da análise leve em
+        conta que a cobertura daquele arquivo é incompleta.
+        """
+
+        # Registra o arquivo na lista de leituras parciais.
+        if str(source_path) not in self.partial:
+            self.partial.append(str(source_path))
+
+        # Registra também como aviso, para aparecer no relatório.
+        self.add_failure(source_path, message)
 
     # Define o método que registra a falha de um arquivo.
     def add_failure(self, source_path, message):
