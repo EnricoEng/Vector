@@ -70,6 +70,7 @@ def run_analysis(
     language=None,
     graphs_directory="results/graphs",
     assessment_callback=None,
+    absence_callback=None,
     progress_callback=None,
 ):
     """
@@ -84,6 +85,8 @@ def run_analysis(
     - graphs_directory: pasta que receberá os grafos;
     - assessment_callback: função chamada para coletar a avaliação
       manual de explorabilidade, ou None para não realizá-la;
+    - absence_callback: função chamada quando a função vulnerável não é
+      encontrada, para perguntar se a ausência é deliberada;
     - progress_callback: função chamada com mensagens de andamento.
 
     O parâmetro assessment_callback recebe o identificador da CVE, o
@@ -296,18 +299,23 @@ def run_analysis(
         # Verifica se a função vulnerável existe no código analisado.
         function_present = bool(targets)
 
+        # Inicializa a confirmação sobre a ausência da função.
+        absence_confirmed = None
+
         # Verifica se a função sequer aparece no código.
         if not function_present:
 
             # Monta a mensagem do aviso.
             #
-            # Este caso merece destaque: a conclusão "não alcançável"
-            # pode significar que a função não é chamada, mas também
-            # que o arquivo que a contém não foi incluído na análise.
+            # A ausência tem duas causas possíveis, com conclusões
+            # opostas: o trecho pode ter sido removido do componente,
+            # caso em que a vulnerabilidade não se aplica, ou o escopo
+            # pode estar incompleto, caso em que a análise não vale.
             message = (
                 f"{cve_id}: a função '{vulnerable_function}' não foi "
-                f"encontrada no código analisado. Verifique se o "
-                f"escopo da análise inclui o arquivo que a declara."
+                f"encontrada no código analisado. Ela pode ter sido "
+                f"removida do componente ou o escopo da análise pode "
+                f"não incluir o arquivo que a declara."
             )
 
             # Registra o aviso na lista.
@@ -315,6 +323,13 @@ def run_analysis(
 
             # Informa o aviso ao chamador.
             report(f"Aviso: {message}")
+
+            # Pergunta ao analista qual das duas causas se aplica.
+            if absence_callback is not None:
+                absence_confirmed = absence_callback(
+                    cve_id,
+                    vulnerable_function,
+                )
 
         # Gera a representação visual do grafo.
         graph_files = generate_call_graph_image(
@@ -365,6 +380,8 @@ def run_analysis(
             is_reachable,
             assessment,
             analysis_complete,
+            function_present,
+            absence_confirmed,
         )
 
         # Cria o registro das evidências utilizadas.
@@ -383,6 +400,7 @@ def run_analysis(
             "manual_assessment": assessment,
             "analysis_complete": analysis_complete,
             "unresolved_calls": unresolved,
+            "absence_confirmed": absence_confirmed,
             "call_graph_dot": graph_files["dot_file"],
             "call_graph_image": graph_files["image_file"],
         }

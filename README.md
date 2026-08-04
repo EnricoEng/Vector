@@ -18,7 +18,7 @@ Quando não é, a vulnerabilidade pode ser documentadamente despriorizada. Quand
 
 | | |
 |---|---|
-| **Linguagens analisadas** | Python (`.py`) e C (`.c`, `.h`) |
+| **Linguagens analisadas** | Python (`.py`), C (`.c`, `.h`) e C++ (`.cpp`, `.hpp`, …) |
 | **Interfaces** | Gráfica (tkinter) e linha de comando |
 | **Escopo da análise** | Um arquivo isolado ou um projeto inteiro |
 | **Saída** | VEX em formato próprio e/ou **CycloneDX 1.6** validável, mais grafo de chamadas em PNG/DOT |
@@ -135,6 +135,9 @@ O protótipo examina o código-fonte sem executá-lo, utilizando um analisador s
 |---|---|---|
 | Python | módulo `ast` | biblioteca padrão |
 | C | `tree-sitter` + `tree-sitter-c` | dependência externa |
+| C++ | `tree-sitter` + `tree-sitter-cpp` | dependência externa |
+
+Os analisadores de C e C++ compartilham a mesma implementação, pois as duas gramáticas produzem os mesmos tipos de nó para o que interessa à análise. O C++ acrescenta o tratamento de nomes qualificados (`Classe::metodo`), nomes de método, destrutores e sobrecargas de operador.
 
 O `tree-sitter` foi escolhido para a linguagem C por dois motivos. Primeiro, não exige que o arquivo seja pré-processado — diretivas como `#include` e `#define` não precisam ser resolvidas antes da análise. Segundo, é tolerante a erros, produzindo uma árvore parcial mesmo quando parte do arquivo não pode ser reconhecida, situação comum ao analisar código isoladamente, sem os cabeçalhos do sistema.
 
@@ -166,7 +169,16 @@ A resposta "desconhecido" é deliberada: ela leva a vulnerabilidade ao estado `U
 ## Modelo de decisão
 
 ```text
-Função vulnerável alcançável?
+A função vulnerável existe no código analisado?
+        |
+        +-- Não --> A ausência é deliberada? (pergunta ao analista)
+        |             |
+        |             +-- Sim --> NOT_AFFECTED
+        |             |            Justificativa: code_not_present
+        |             |
+        |             +-- Não ou desconhecido --> UNDER_INVESTIGATION
+        |
+        +-- Sim --> Função vulnerável alcançável?
         |
         +-- Não --> NOT_AFFECTED
         |            Justificativa: code_not_reachable
@@ -199,8 +211,19 @@ Função vulnerável alcançável?
 | Estado | `analysis_state` | Quando é atribuído |
 |---|---|---|
 | `AFFECTED` | `exploitable` | Função alcançável, entrada controlada pelo atacante e sem mitigação identificada |
-| `NOT_AFFECTED` | `not_affected` | Função não alcançável; **ou** entrada não controlada pelo atacante; **ou** mitigação efetiva no contexto avaliado |
-| `UNDER_INVESTIGATION` | `in_triage` | Função alcançável, mas a avaliação manual não foi feita ou foi inconclusiva |
+| `NOT_AFFECTED` | `not_affected` | Função ausente do produto; **ou** não alcançável; **ou** entrada não controlada pelo atacante; **ou** mitigação efetiva no contexto avaliado |
+| `UNDER_INVESTIGATION` | `in_triage` | A avaliação manual não foi feita, foi inconclusiva, ou a análise não compreendeu todo o código percorrido |
+
+As justificativas possíveis para `NOT_AFFECTED` são:
+
+| Justificativa | Significado |
+|---|---|
+| `code_not_present` | A função **não existe** no produto: foi removida do componente ou excluída da compilação |
+| `code_not_reachable` | A função existe, mas não há caminho até ela a partir do ponto de entrada |
+| `attacker_controlled_input_not_present` | A função é alcançável, mas o atacante não controla a entrada que chega até ela |
+| `protected_by_mitigating_control` | Existe uma mitigação que impede a exploração no contexto avaliado |
+
+`code_not_present` é a mais forte das quatro: as demais afirmam algo sobre como a função é usada, enquanto ela afirma que a função não está lá.
 
 O campo `residual_risk` permanece `true` quando a classificação `NOT_AFFECTED` decorre de uma mitigação, e não da ausência de caminho. A distinção importa: uma mitigação pode ser removida em uma alteração futura do código.
 
@@ -214,6 +237,13 @@ Por isso, a ausência de um caminho **não é suficiente** para emitir essa just
 2. **funções decoradas fora do alcance** dos pontos de entrada escolhidos, que representam trechos executáveis que a busca sequer visitou.
 
 Em qualquer uma delas, o resultado passa a ser `UNDER_INVESTIGATION`, com o motivo registrado em `analysis_scope.warnings` e o detalhamento em `evidence.unresolved_calls`.
+
+Pelo mesmo princípio, quando a função vulnerável **não é encontrada** no código analisado, a ferramenta não conclui nada sozinha. A ausência tem duas causas possíveis, com conclusões opostas:
+
+- o trecho foi **removido do componente** ou excluído da compilação, e a vulnerabilidade não se aplica ao produto;
+- o **escopo informado está incompleto**, e a análise não vale.
+
+No código as duas são idênticas — a função simplesmente não está lá —, de modo que a distinção depende de saber como o componente foi construído. Por isso ela é perguntada ao analista, do mesmo modo que as informações de explorabilidade. Sem confirmação, o resultado é `UNDER_INVESTIGATION`; com ela, `NOT_AFFECTED` / `code_not_present`.
 
 O critério é assimétrico de propósito. Um falso positivo custa tempo do analista; um falso negativo declara "não afetado" sobre algo explorável. Diante da dúvida, a ferramenta prefere investigar.
 
@@ -282,6 +312,7 @@ pip install -r requirements.txt
 | Pacote | Finalidade | O que acontece sem ele |
 |---|---|---|
 | `tree-sitter`, `tree-sitter-c` | Análise de código C | A análise de C é interrompida com uma mensagem orientando a instalação. A análise de Python não é afetada |
+| `tree-sitter-cpp` | Análise de código C++ | A análise de C++ é interrompida com uma mensagem orientando a instalação |
 | `graphviz` | Grafo de chamadas | A análise conclui normalmente e apenas a imagem PNG deixa de ser gerada |
 | `ttkbootstrap` | Tema escuro da interface | A janela usa o tema `clam` do próprio `ttk`, com todas as funcionalidades idênticas |
 
@@ -493,6 +524,26 @@ Ao responder, considere o **caminho exibido**: ele mostra por onde os dados traf
 
 Se você não tiver certeza, responda `d`. O estado `UNDER_INVESTIGATION` é um resultado legítimo e preferível a uma conclusão sem base.
 
+#### Quando a função não é encontrada
+
+Se a função vulnerável não existir no código analisado, a ferramenta faz uma pergunta diferente, antes de qualquer avaliação de explorabilidade:
+
+```text
+======================================================================
+Função ausente: CVE-2022-49043
+Função vulnerável: xmlXIncludeAddNode
+A função não foi encontrada no código analisado. Isso pode significar
+que ela foi removida do componente, ou que o escopo da análise está
+incompleto.
+======================================================================
+A ausência é deliberada, ou seja, o trecho foi removido do componente
+ou excluído da compilação? [s/n/d]:
+```
+
+Responda `s` **apenas com evidência** de que o trecho não é compilado — por exemplo, o arquivo ausente da árvore, uma entrada comentada no sistema de build, ou o recurso desabilitado na configuração. O [Caso 8](#caso-8--componente-real-função-vulnerável-ausente-do-build) demonstra essa verificação em um componente real.
+
+Nas demais respostas o resultado é `UNDER_INVESTIGATION`, que é o correto quando não se sabe se o escopo estava completo.
+
 ### Passo 5 — Interpretar o resultado
 
 A saída no terminal traz o grafo de chamadas e a conclusão por vulnerabilidade:
@@ -545,7 +596,7 @@ Declaração VEX salva em: results/case1-vex.json
 | `--version` | Sim | — | Versão do produto analisado |
 | `--output` | Sim | — | Arquivo JSON que receberá a declaração VEX |
 | `--entry` | Não | `main` | Ponto(s) de entrada: uma função, várias separadas por vírgula, ou `*` para todas as candidatas |
-| `--language` | Não | detectar | Linguagem do código: `python` ou `c` |
+| `--language` | Não | detectar | Linguagem do código: `python`, `c` ou `cpp` |
 | `--format` | Não | `poc` | Formato da declaração: `poc`, `cyclonedx` ou `ambos` |
 | `--graphs` | Não | `results/graphs` | Pasta que receberá os grafos gerados |
 | `--manual` | Não | desativado | Ativa a avaliação de explorabilidade para funções alcançáveis |
@@ -816,6 +867,7 @@ O diretório `cases/` contém casos que demonstram cada resultado possível. Os 
 | 5 | `case5_c_nao_alcancavel.c` | C | não perguntadas | `NOT_AFFECTED` / `code_not_reachable` |
 | 6 | `ProjetoTestC/` (pasta) | C | entrada: `s`, mitigação: `n` | `AFFECTED` |
 | 7 | `ProjetoTestPython/` (pasta) | Python | entrada: `s`, mitigação: `n` | `AFFECTED` |
+| 8 | `SF-529088_Projeto_libxml2/` (pasta) | C++ e C | ausência confirmada | `NOT_AFFECTED` / `code_not_present` |
 
 ### Caso 6 — Projeto com vários arquivos
 
@@ -869,6 +921,58 @@ python analyzer.py \
 
 Detalhes em [cases/ProjetoTestPython/README.md](cases/ProjetoTestPython/README.md).
 
+### Caso 8 — Componente real, função vulnerável ausente do build
+
+Os casos anteriores usam CVEs fictícias e código escrito para o teste. O caso 8 usa uma **vulnerabilidade real** e o **código-fonte real** do Qt WebEngine 5.15.12 LTS.
+
+A vulnerabilidade é a [CVE-2022-49043](https://nvd.nist.gov/vuln/detail/CVE-2022-49043): um *use-after-free* em `xmlXIncludeAddNode`, no arquivo `xinclude.c` do libxml2 anterior à versão 2.11.0.
+
+O caso contém 27 arquivos `.c` do libxml2 e 32 arquivos `.cc` do Blink, obtidos por clone esparso do repositório `qtwebengine-chromium`. Do libxml2 foram copiados **apenas os arquivos que o `BUILD.gn` compila**: o escopo da análise deve ser o escopo da compilação, pois código não compilado não existe no binário.
+
+#### Análise em dois estágios
+
+O ponto de entrada aqui não é `main`. A aplicação Qt não chama o libxml2 diretamente — quem chama é o Chromium —, e as duas camadas estão em linguagens diferentes. A análise é feita em duas etapas encadeadas:
+
+| Estágio | Escopo | Linguagem | Pergunta respondida |
+|---|---|---|---|
+| 1 | `chromium/blink/xml` | C++ | Quais funções do libxml2 o motor de renderização chama? |
+| 2 | `third_party/libxml` | C | Partindo dessas funções, a função vulnerável é alcançável? |
+
+O estágio 1 identifica **46 funções do libxml2** chamadas pelo Blink, nenhuma delas pertencente à API de XInclude. As 43 que existem na biblioteca tornam-se os pontos de entrada do estágio 2:
+
+```bash
+python analyzer.py \
+  --source "cases/SF-529088_Projeto_libxml2/third_party/libxml" \
+  --language c \
+  --cves "data_cves/caseSF-529088_Projeto_libxml2.json" \
+  --entry "$(cat cases/SF-529088_Projeto_libxml2/entry_points.txt)" \
+  --product Qt6WebEngineCore --version 5.15.12 \
+  --output results/SF-529088-vex.json \
+  --manual
+```
+
+#### Resultado
+
+```text
+Estado VEX: NOT_AFFECTED
+Justificativa: code_not_present
+```
+
+A função vulnerável **não existe no produto**. Quatro evidências independentes sustentam a resposta afirmativa à pergunta sobre a ausência:
+
+| # | Evidência | Onde |
+|---|---|---|
+| 1 | `#"src/xinclude.c",` — comentado, fora do build | `BUILD.gn` |
+| 2 | "Delete various unused files" — o arquivo não está na cópia | `README.chromium` |
+| 3 | `#if 0` em torno de `#define LIBXML_XINCLUDE_ENABLED`, nas três plataformas | `win32/`, `mac/`, `linux/` |
+| 4 | 46 chamadas ao libxml2, nenhuma a XInclude | análise do Blink |
+
+A terceira evidência resolve uma contradição aparente: o `xmlreader.c` **é** compilado e referencia a API de XInclude, mas sob `#ifdef`, e o recurso está desabilitado em todas as plataformas.
+
+Este é o caso que motivou a justificativa `code_not_present`. Ela é mais forte que `code_not_reachable`: não se trata de uma função que existe e não é chamada, e sim de uma função que não está no binário.
+
+Detalhes, comandos de obtenção do código e licenças em [cases/SF-529088_Projeto_libxml2/README.md](cases/SF-529088_Projeto_libxml2/README.md).
+
 Os casos 1 e 4 reproduzem a mesma cadeia de chamadas em linguagens diferentes, o que permite comparar diretamente o comportamento dos dois analisadores sintáticos:
 
 ```text
@@ -915,6 +1019,7 @@ Vector/
 │       ├── __init__.py         Seleção do analisador por linguagem
 │       ├── base.py             Estrutura comum e busca de arquivos
 │       ├── c_parser.py         Analisador de C (tree-sitter)
+│       ├── cpp_parser.py       Analisador de C++ (tree-sitter)
 │       └── python_parser.py    Analisador de Python (ast)
 ├── assets/                     Logo em SVG e PNG
 ├── tools/

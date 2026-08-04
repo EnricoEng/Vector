@@ -1395,6 +1395,44 @@ class AnalyzerWindow(ttk.Frame):
         # Devolve as respostas coletadas.
         return dialog.result
 
+    # Define o método que pergunta sobre a ausência da função.
+    def ask_absence(self, cve_id, function_name):
+        """
+        Pergunta ao analista por que a função vulnerável não foi
+        encontrada no código.
+
+        A ausência tem duas causas possíveis, com conclusões opostas: o
+        trecho pode ter sido removido do componente, situação em que a
+        vulnerabilidade não se aplica, ou o escopo pode estar
+        incompleto, situação em que a análise não conclui nada.
+
+        Devolve True quando a ausência é deliberada, e None caso
+        contrário.
+        """
+
+        # Exibe a pergunta em uma caixa de diálogo.
+        #
+        # A caixa oferece três respostas: sim, não e cancelar, que
+        # correspondem a confirmado, não confirmado e desconhecido.
+        resposta = messagebox.askyesnocancel(
+            f"Função ausente — {cve_id}",
+            f"A função '{function_name}' não foi encontrada no código "
+            f"analisado.\n\n"
+            f"Isso pode significar que ela foi removida do componente "
+            f"ou excluída da compilação, ou que o escopo da análise "
+            f"não inclui o arquivo que a declara.\n\n"
+            f"A ausência é deliberada?\n\n"
+            f"Sim  — o trecho foi removido ou não é compilado\n"
+            f"Não  — o escopo pode estar incompleto\n"
+            f"Cancelar — não sei responder",
+        )
+
+        # Converte a resposta em confirmação.
+        #
+        # Apenas o "sim" sustenta a justificativa code_not_present. As
+        # demais respostas deixam a vulnerabilidade em investigação.
+        return True if resposta is True else None
+
     # Define o método que executa a análise.
     def run(self):
 
@@ -1450,6 +1488,7 @@ class AnalyzerWindow(ttk.Frame):
                 language=self.selected_language(),
                 graphs_directory=str(output_path.parent / "graphs"),
                 assessment_callback=assessment_callback,
+                absence_callback=self.ask_absence,
                 progress_callback=self.write,
             )
 

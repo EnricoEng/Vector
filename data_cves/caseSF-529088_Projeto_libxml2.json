@@ -1,0 +1,10 @@
+{
+  "vulnerabilities": [
+    {
+      "id": "CVE-2022-49043",
+      "component": "libxml2",
+      "component_version": "2.10.4",
+      "function": "xmlXIncludeAddNode"
+    }
+  ]
+}

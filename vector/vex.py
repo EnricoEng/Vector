@@ -142,12 +142,19 @@ def classify_vulnerability(
     reachable,
     assessment=None,
     analysis_complete=True,
+    function_present=True,
+    absence_confirmed=None,
 ):
     """
     Classifica uma vulnerabilidade usando a seguinte lógica:
 
-    0. Não alcançável, mas a análise não compreendeu todo o código
-       percorrido: UNDER_INVESTIGATION / in_triage.
+    0a. Função ausente do código, e o analista confirmou que a ausência
+        é deliberada: NOT_AFFECTED / code_not_present.
+
+    0b. Função ausente sem confirmação: UNDER_INVESTIGATION / in_triage.
+
+    0c. Não alcançável, mas a análise não compreendeu todo o código
+        percorrido: UNDER_INVESTIGATION / in_triage.
 
     1. Não alcançável e análise completa:
        NOT_AFFECTED / code_not_reachable.
@@ -164,6 +171,62 @@ def classify_vulnerability(
     5. Informação desconhecida:
        UNDER_INVESTIGATION / in_triage.
     """
+
+    # Verifica se a função vulnerável sequer existe no código analisado.
+    #
+    # Este caso precisa ser separado do "não alcançável". Uma função que
+    # não está no código não é apenas inalcançável: ela não existe no
+    # binário produzido, o que é uma condição mais forte.
+    #
+    # A ferramenta não consegue distinguir sozinha as duas causas
+    # possíveis da ausência:
+    #
+    # 1. a função foi removida do componente ou excluída da compilação,
+    #    situação em que a vulnerabilidade não se aplica;
+    # 2. o escopo informado não inclui o arquivo que a declara,
+    #    situação em que a análise está incompleta.
+    #
+    # A distinção depende de conhecimento sobre como o componente foi
+    # construído, e por isso é perguntada ao analista, do mesmo modo que
+    # as demais informações contextuais.
+    if not function_present:
+
+        # Verifica se o analista confirmou que a ausência é deliberada.
+        if absence_confirmed is True:
+
+            # Classifica como não afetado por ausência do código.
+            return {
+                "product_status": "NOT_AFFECTED",
+                "cyclonedx_state": "not_affected",
+                "justification": "code_not_present",
+                "response": [],
+                "residual_risk": False,
+                "reason": (
+                    "A função vulnerável não está presente no código "
+                    "analisado. O analista confirmou que a ausência é "
+                    "deliberada: o trecho foi removido do componente ou "
+                    "excluído da compilação, de modo que a função não "
+                    "existe no binário produzido."
+                ),
+            }
+
+        # Mantém a vulnerabilidade em investigação.
+        #
+        # Sem a confirmação, a ausência é ambígua e não sustenta
+        # nenhuma das duas justificativas.
+        return {
+            "product_status": "UNDER_INVESTIGATION",
+            "cyclonedx_state": "in_triage",
+            "justification": None,
+            "response": [],
+            "residual_risk": True,
+            "reason": (
+                "A função vulnerável não foi encontrada no código "
+                "analisado. Não foi possível determinar se ela foi "
+                "removida do componente ou se o escopo da análise não "
+                "inclui o arquivo que a declara."
+            ),
+        }
 
     # Verifica o resultado automático da análise de alcançabilidade.
     if not reachable:

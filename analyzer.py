@@ -141,6 +141,60 @@ def collect_manual_assessment(cve, function_name, path):
     }
 
 
+# Define a função que pergunta sobre a ausência da função vulnerável.
+def confirm_absence(cve, function_name):
+    """
+    Pergunta ao analista por que a função vulnerável não foi encontrada.
+
+    A ausência tem duas causas possíveis, com conclusões opostas:
+
+    - o trecho foi removido do componente ou excluído da compilação,
+      caso em que a vulnerabilidade não se aplica ao produto;
+    - o escopo informado não inclui o arquivo que declara a função,
+      caso em que a análise está incompleta e não conclui nada.
+
+    A ferramenta não consegue distinguir as duas apenas olhando o
+    código, pois nos dois casos a função simplesmente não está lá.
+
+    Retorna True quando a ausência é deliberada, e None caso contrário.
+    """
+
+    # Exibe uma linha em branco.
+    print()
+
+    # Exibe um separador visual.
+    print("=" * 70)
+
+    # Exibe o identificador da vulnerabilidade.
+    print(f"Função ausente: {cve}")
+
+    # Exibe a função procurada.
+    print(f"Função vulnerável: {function_name}")
+
+    # Explica por que a pergunta está sendo feita.
+    print(
+        "A função não foi encontrada no código analisado. Isso pode "
+        "significar\nque ela foi removida do componente, ou que o "
+        "escopo da análise está\nincompleto."
+    )
+
+    # Exibe outro separador.
+    print("=" * 70)
+
+    # Pergunta se a ausência é deliberada.
+    resposta = ask_yes_no_unknown(
+        "A ausência é deliberada, ou seja, o trecho foi removido do "
+        "componente\nou excluído da compilação?"
+    )
+
+    # Converte a resposta em confirmação.
+    #
+    # Apenas o "sim" confirma a ausência. Tanto o "não" quanto o
+    # "desconhecido" deixam a vulnerabilidade em investigação, pois
+    # nenhum dos dois sustenta a justificativa code_not_present.
+    return True if resposta is True else None
+
+
 # Define uma função para exibir o grafo no terminal.
 def print_graph(graph):
 
@@ -378,11 +432,17 @@ def main():
     # motor de análise que o questionário não deve ser executado.
     assessment_callback = None
 
+    # Define a forma de perguntar sobre a ausência da função.
+    absence_callback = None
+
     # Verifica se a análise manual foi solicitada.
     if args.manual:
 
         # Usa a coleta pelo terminal.
         assessment_callback = collect_manual_assessment
+
+        # Usa a mesma via para a pergunta sobre a ausência.
+        absence_callback = confirm_absence
 
     # Inicia o tratamento dos erros previstos pela PoC.
     try:
@@ -397,6 +457,7 @@ def main():
             language=args.language,
             graphs_directory=args.graphs,
             assessment_callback=assessment_callback,
+            absence_callback=absence_callback,
             progress_callback=print,
         )
 

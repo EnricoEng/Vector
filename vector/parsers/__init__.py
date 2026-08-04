@@ -1,7 +1,7 @@
 # Concentra a seleção do analisador adequado a cada linguagem.
 #
 # Este módulo é o ponto único em que a PoC decide se um código-fonte
-# deve ser tratado como Python ou como C. A interface gráfica e a linha
+# deve ser tratado como Python, C ou C++. A interface gráfica e a linha
 # de comando utilizam apenas as funções daqui, sem precisar conhecer os
 # detalhes de cada analisador.
 
@@ -13,6 +13,9 @@ from ..errors import LanguageError, SourceError
 
 # Importa o analisador de C e suas extensões.
 from . import c_parser
+
+# Importa o analisador de C++ e suas extensões.
+from . import cpp_parser
 
 # Importa o analisador de Python e suas extensões.
 from . import python_parser
@@ -39,6 +42,11 @@ SUPPORTED_LANGUAGES = {
         "label": "C (.c / .h)",
         "extensions": c_parser.C_EXTENSIONS,
         "analyze": c_parser.analyze,
+    },
+    "cpp": {
+        "label": "C++ (.cpp / .hpp)",
+        "extensions": cpp_parser.CPP_EXTENSIONS,
+        "analyze": cpp_parser.analyze,
     },
 }
 
@@ -84,7 +92,8 @@ def detect_language(path):
         # Interrompe a execução quando a extensão não é suportada.
         raise LanguageError(
             f"Extensão não suportada: '{suffix}'. "
-            f"A PoC analisa apenas Python (.py) e C (.c/.h)."
+            f"A PoC analisa Python (.py), C (.c/.h) e "
+            f"C++ (.cpp/.cc/.cxx/.hpp/.hh/.hxx)."
         )
 
     # A partir deste ponto, o caminho aponta para uma pasta.
@@ -108,8 +117,7 @@ def detect_language(path):
 
         # Interrompe a execução informando o motivo.
         raise LanguageError(
-            f"Nenhum arquivo Python (.py) ou C (.c/.h) encontrado "
-            f"em: {path}"
+            f"Nenhum arquivo Python, C ou C++ encontrado em: {path}"
         )
 
     # Retorna a linguagem predominante na pasta.

@@ -68,15 +68,22 @@ WRAPPER_EXPRESSIONS = {
 }
 
 
-# Define a função responsável por carregar o analisador do tree-sitter.
-def load_parser():
+# Define a função responsável por carregar um analisador do tree-sitter.
+def load_parser(grammar_module="tree_sitter_c", label="C"):
     """
-    Cria e devolve um analisador tree-sitter configurado para C.
+    Cria e devolve um analisador tree-sitter para a gramática indicada.
+
+    O módulo da gramática é um parâmetro porque a mesma implementação
+    atende C e C++: as duas linguagens compartilham os tipos de nó que
+    interessam à análise, mudando apenas a gramática carregada.
 
     Levanta DependencyError quando os pacotes necessários não estão
     instalados ou quando as versões instaladas são incompatíveis entre
     si, situação em que o tree-sitter recusa a gramática.
     """
+
+    # Monta o nome do pacote instalável a partir do módulo.
+    package = grammar_module.replace("_", "-")
 
     # Inicia o tratamento da ausência das dependências.
     try:
@@ -84,30 +91,32 @@ def load_parser():
         # Importa a classe que representa uma gramática e o analisador.
         from tree_sitter import Language, Parser
 
-        # Importa a gramática da linguagem C.
-        import tree_sitter_c
+        # Importa dinamicamente a gramática solicitada.
+        from importlib import import_module
+
+        grammar = import_module(grammar_module)
 
     # Captura a ausência de qualquer um dos pacotes.
     except ImportError as error:
 
         # Converte o erro em uma mensagem que orienta a instalação.
         raise DependencyError(
-            "A análise de código C exige os pacotes tree-sitter e "
-            "tree-sitter-c. Instale as dependências com:\n"
-            "    pip install -r requirements.txt"
+            f"A análise de código {label} exige os pacotes tree-sitter "
+            f"e {package}. Instale as dependências com:\n"
+            f"    pip install -r requirements.txt"
         ) from error
 
     # Inicia o tratamento de incompatibilidade entre as versões.
     try:
 
-        # Carrega a gramática da linguagem C.
-        language = Language(tree_sitter_c.language())
+        # Carrega a gramática solicitada.
+        language = Language(grammar.language())
 
         # Cria o analisador já associado à gramática.
         return Parser(language)
 
     # Captura a incompatibilidade de versão entre tree-sitter
-    # e tree-sitter-c.
+    # e a gramática.
     #
     # O tree-sitter valida a versão da ABI da gramática e recusa
     # gramáticas mais novas do que a biblioteca instalada.
@@ -115,10 +124,10 @@ def load_parser():
 
         # Converte o erro em uma mensagem que orienta a correção.
         raise DependencyError(
-            "As versões instaladas de tree-sitter e tree-sitter-c são "
-            "incompatíveis entre si. Reinstale as versões testadas "
-            "com:\n"
-            "    pip install -r requirements.txt\n"
+            f"As versões instaladas de tree-sitter e {package} são "
+            f"incompatíveis entre si. Reinstale as versões testadas "
+            f"com:\n"
+            f"    pip install -r requirements.txt\n"
             f"Detalhe técnico: {error}"
         ) from error
 
@@ -157,10 +166,33 @@ def declarator_name(node, source_bytes):
     while node is not None:
 
         # Verifica se o nó já é o identificador procurado.
-        if node.type == "identifier":
+        #
+        # Os demais tipos aparecem apenas em C++: field_identifier
+        # nomeia métodos, e os outros dois nomeiam destrutores e
+        # sobrecargas de operador.
+        if node.type in (
+            "identifier",
+            "field_identifier",
+            "destructor_name",
+            "operator_name",
+        ):
 
             # Retorna o nome da função.
             return node_text(node, source_bytes)
+
+        # Verifica se o nó é um nome qualificado, como Classe::metodo.
+        #
+        # Só ocorre em C++. A PoC identifica funções pelo último
+        # componente do nome, do mesmo modo que já faz com as chamadas
+        # por atributo, de forma que a definição do método e a chamada
+        # a ele produzam o mesmo nó no grafo.
+        if node.type == "qualified_identifier":
+
+            # Continua a busca pelo componente final do nome.
+            node = node.child_by_field_name("name")
+
+            # Reinicia o laço com o novo nó.
+            continue
 
         # Verifica se o nó é o declarador da função.
         #
@@ -368,10 +400,23 @@ def resolve_call(node, source_bytes, aliases, containers, result, caller):
     # Percorre a árvore enquanto houver um nó a examinar.
     while node is not None:
 
+        # Verifica se a chamada usa um nome qualificado.
+        #
+        # Exemplo, em C++: blink::Parse()
+        if node.type == "qualified_identifier":
+
+            # Continua a busca pelo componente final do nome.
+            node = node.child_by_field_name("name")
+
+            # Reinicia o laço com o novo nó.
+            continue
+
         # Verifica se o nó é um identificador simples.
         #
         # Exemplo: process()
-        if node.type == "identifier":
+        #
+        # field_identifier aparece em C++ ao chamar um método.
+        if node.type in ("identifier", "field_identifier"):
 
             # Obtém o texto do identificador.
             name = node_text(node, source_bytes)
@@ -674,35 +719,47 @@ def parse_file(source_path, parser):
     return tree, source_bytes
 
 
-# Define a função que analisa um arquivo ou uma pasta de código C.
-def analyze(path):
+# Define a função que analisa código com uma gramática do tree-sitter.
+def analyze_tree_sitter(
+    path,
+    extensions,
+    language,
+    grammar_module,
+    label,
+    description,
+):
     """
-    Analisa código C e retorna um CallGraphResult.
+    Analisa código C ou C++ e retorna um CallGraphResult.
 
     O caminho informado pode ser um arquivo ou uma pasta. Quando é uma
-    pasta, todos os arquivos .c e .h encontrados são analisados e seus
-    grafos são unidos em um único grafo de chamadas.
+    pasta, todos os arquivos das extensões indicadas são analisados e
+    seus grafos são unidos em um único grafo de chamadas.
+
+    A função é compartilhada pelas duas linguagens porque os tipos de nó
+    que interessam à análise são os mesmos. O que muda é a gramática
+    carregada e o conjunto de extensões reconhecidas.
     """
 
     # Localiza os arquivos que devem ser analisados.
-    source_files = collect_source_files(path, C_EXTENSIONS)
+    source_files = collect_source_files(path, extensions)
 
     # Verifica se algum arquivo foi encontrado.
     if not source_files:
 
         # Interrompe a análise informando o motivo.
         raise SourceError(
-            f"Nenhum arquivo C (.c ou .h) encontrado em: {path}"
+            f"Nenhum arquivo {label} ({description}) encontrado "
+            f"em: {path}"
         )
 
     # Cria o analisador do tree-sitter uma única vez.
     #
     # O mesmo analisador é reaproveitado para todos os arquivos,
     # evitando recarregar a gramática a cada arquivo.
-    parser = load_parser()
+    parser = load_parser(grammar_module, label)
 
     # Cria a estrutura que acumulará o resultado da análise.
-    result = CallGraphResult(language="c")
+    result = CallGraphResult(language=language)
 
     # Inicializa a lista de árvores já convertidas.
     trees = []
@@ -784,8 +841,25 @@ def analyze(path):
 
         # Interrompe a execução, pois não há grafo para analisar.
         raise ParseError(
-            f"Nenhum arquivo C pôde ser analisado em: {path}"
+            f"Nenhum arquivo {label} pôde ser analisado em: {path}"
         )
 
     # Retorna o resultado da análise estática.
     return result
+
+
+# Define a função que analisa um arquivo ou uma pasta de código C.
+def analyze(path):
+    """
+    Analisa código C e retorna um CallGraphResult.
+    """
+
+    # Delega à implementação compartilhada com o analisador de C++.
+    return analyze_tree_sitter(
+        path=path,
+        extensions=C_EXTENSIONS,
+        language="c",
+        grammar_module="tree_sitter_c",
+        label="C",
+        description=".c ou .h",
+    )

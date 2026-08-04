@@ -55,6 +55,7 @@ SPEC_VERSION = "1.6"
 # A aproximação é registrada no documento como uma propriedade nomeada,
 # de modo que a justificativa original da PoC não se perde.
 JUSTIFICATION_MAP = {
+    "code_not_present": "code_not_present",
     "code_not_reachable": "code_not_reachable",
     "protected_by_mitigating_control": "protected_by_mitigating_control",
     "attacker_controlled_input_not_present": "requires_environment",
