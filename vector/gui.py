@@ -96,8 +96,8 @@ from .version import __version__
 # antes de executar a análise completa.
 from .parsers import SUPPORTED_LANGUAGES, analyze as analyze_source
 
-# Importa a sugestão de pontos de entrada.
-from .reachability import suggest_entry_points
+# Importa a sugestão e a derivação de pontos de entrada.
+from .reachability import derive_entry_points, suggest_entry_points
 
 
 # Define o texto usado na opção de detecção automática da linguagem.
@@ -432,6 +432,272 @@ class ManualAssessmentDialog(tk.Toplevel):
         self.destroy()
 
 
+# Define a janela que pede o código consumidor da biblioteca.
+class ConsumerDialog(tk.Toplevel):
+    """
+    Caixa de diálogo do estágio 1 da análise em dois estágios.
+
+    Pergunta qual código consome a biblioteca já selecionada, para que
+    os pontos de entrada sejam derivados a partir do que ele chama.
+
+    A biblioteca não é perguntada: ela é o "Código-fonte" da janela
+    principal, já preenchido pelo analista.
+    """
+
+    # O método __init__ é executado quando a janela é criada.
+    def __init__(self, parent, library):
+
+        # Chama o construtor da classe Toplevel.
+        super().__init__(parent)
+
+        # Define o título da janela.
+        self.title("Derivar pontos de entrada")
+
+        # Impede o redimensionamento, já que o conteúdo é fixo.
+        self.resizable(False, False)
+
+        # Inicializa o resultado como ausente.
+        self.result = None
+
+        # Armazena a biblioteca, usada para validar o consumidor.
+        self.library = library
+
+        # Cria a variável que armazena o caminho do consumidor.
+        self.consumer = tk.StringVar()
+
+        # Cria a variável que armazena a linguagem do consumidor.
+        self.consumer_language = tk.StringVar(value=AUTO_DETECT_LABEL)
+
+        # Monta os widgets da janela.
+        self.build_widgets(library)
+
+        # Impede a interação com a janela principal enquanto esta
+        # caixa de diálogo estiver aberta.
+        self.transient(parent)
+        self.grab_set()
+
+        # Trata o fechamento pela barra de título como cancelamento.
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+    # Define o método que monta os widgets da janela.
+    def build_widgets(self, library):
+
+        # Cria o quadro principal com espaçamento interno.
+        frame = ttk.Frame(self, padding=16)
+
+        # Posiciona o quadro ocupando toda a janela.
+        frame.pack(fill="both", expand=True)
+
+        # Explica o que a caixa faz.
+        ttk.Label(
+            frame,
+            text=(
+                "Os pontos de entrada serão as funções da biblioteca "
+                "que o código consumidor efetivamente chama."
+            ),
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w")
+
+        # Acrescenta uma linha separadora.
+        ttk.Separator(frame).pack(fill="x", pady=12)
+
+        # Exibe as duas pastas lado a lado, deixando claro que são
+        # diferentes.
+        #
+        # A distinção precisa ficar explícita: informar a própria
+        # biblioteca como consumidor é o engano mais provável aqui, e
+        # produz uma lista enorme com as chamadas internas dela.
+        ttk.Label(
+            frame,
+            text="Biblioteca — já selecionada em 'Código-fonte':",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            frame,
+            text=library,
+            wraplength=520,
+            justify="left",
+            foreground="#64748B",
+        ).pack(anchor="w", pady=(2, 0))
+
+        ttk.Label(
+            frame,
+            text=(
+                "É onde está a função vulnerável. Não informe esta "
+                "mesma pasta abaixo."
+            ),
+            wraplength=520,
+            justify="left",
+            foreground="#64748B",
+        ).pack(anchor="w", pady=(2, 0))
+
+        # Acrescenta outra linha separadora.
+        ttk.Separator(frame).pack(fill="x", pady=12)
+
+        # Exibe o rótulo do campo do consumidor.
+        ttk.Label(
+            frame,
+            text="Consumidor — informe abaixo:",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w")
+
+        # Explica o que se espera nesse campo.
+        ttk.Label(
+            frame,
+            text=(
+                "Pasta do código que utiliza a biblioteca, normalmente "
+                "de outra camada da aplicação. Pode estar em uma "
+                "linguagem diferente."
+            ),
+            wraplength=520,
+            justify="left",
+            foreground="#64748B",
+        ).pack(anchor="w", pady=(2, 6))
+
+        # Cria o quadro que agrupa o campo e o botão.
+        row = ttk.Frame(frame)
+
+        # Posiciona o quadro.
+        row.pack(fill="x", pady=(4, 0))
+
+        # Cria o campo que exibe o caminho escolhido.
+        ttk.Entry(row, textvariable=self.consumer, width=52).pack(
+            side="left",
+            fill="x",
+            expand=True,
+        )
+
+        # Cria o botão que abre o seletor de pasta.
+        ttk.Button(
+            row,
+            text="Pasta...",
+            **boot(bootstyle="secondary-outline"),
+            command=self.choose_consumer,
+            width=9,
+        ).pack(side="left", padx=(6, 0))
+
+        # Exibe o rótulo da seleção de linguagem.
+        ttk.Label(
+            frame,
+            text="Linguagem do consumidor:",
+        ).pack(anchor="w", pady=(12, 4))
+
+        # Cria o quadro que agrupa as opções de linguagem.
+        languages = ttk.Frame(frame)
+
+        # Posiciona o quadro das opções.
+        languages.pack(anchor="w")
+
+        # Cria a opção de detecção automática.
+        ttk.Radiobutton(
+            languages,
+            text=AUTO_DETECT_LABEL,
+            value=AUTO_DETECT_LABEL,
+            variable=self.consumer_language,
+        ).pack(side="left", padx=(0, 12))
+
+        # Percorre as linguagens suportadas pela PoC.
+        for name, definition in SUPPORTED_LANGUAGES.items():
+
+            # Cria o botão de opção da linguagem atual.
+            ttk.Radiobutton(
+                languages,
+                text=definition["label"],
+                value=name,
+                variable=self.consumer_language,
+            ).pack(side="left", padx=(0, 12))
+
+        # Cria o quadro que agrupa os botões finais.
+        buttons = ttk.Frame(frame)
+
+        # Posiciona o quadro dos botões.
+        buttons.pack(fill="x", pady=(16, 0))
+
+        # Cria o botão que confirma a derivação.
+        ttk.Button(
+            buttons,
+            text="Derivar",
+            command=self.on_confirm,
+            **boot(bootstyle="primary"),
+        ).pack(side="right")
+
+        # Cria o botão que cancela.
+        ttk.Button(
+            buttons,
+            text="Cancelar",
+            command=self.on_cancel,
+            **boot(bootstyle="secondary-outline"),
+        ).pack(side="right", padx=(0, 8))
+
+    # Define o método que seleciona a pasta do consumidor.
+    def choose_consumer(self):
+
+        # Abre o diálogo de seleção de pasta.
+        chosen = filedialog.askdirectory(
+            title="Selecione a pasta do código consumidor",
+        )
+
+        # Armazena o caminho escolhido.
+        if chosen:
+            self.consumer.set(chosen)
+
+    # Define o método executado ao confirmar.
+    def on_confirm(self):
+
+        # Obtém o caminho informado, sem espaços nas pontas.
+        consumer = self.consumer.get().strip()
+
+        # Verifica se o caminho foi informado.
+        if not consumer:
+
+            # Avisa o analista e mantém a janela aberta.
+            messagebox.showwarning(
+                "Campo obrigatório",
+                "Selecione a pasta do código consumidor.",
+                parent=self,
+            )
+            return
+
+        # Verifica se o consumidor é a própria biblioteca.
+        #
+        # A validação acontece aqui, e não só no motor, para que o
+        # analista possa corrigir sem fechar a caixa e recomeçar.
+        if Path(consumer).resolve() == Path(self.library).resolve():
+
+            # Avisa o analista e mantém a janela aberta.
+            messagebox.showwarning(
+                "Pastas iguais",
+                "O consumidor não pode ser a própria biblioteca.\n\n"
+                "Informe a pasta do código que utiliza a biblioteca, "
+                "geralmente de outra camada da aplicação.",
+                parent=self,
+            )
+            return
+
+        # Obtém a linguagem escolhida.
+        language = self.consumer_language.get()
+
+        # Armazena o resultado da caixa de diálogo.
+        self.result = {
+            "consumer": consumer,
+            "consumer_language": (
+                None if language == AUTO_DETECT_LABEL else language
+            ),
+        }
+
+        # Fecha a janela.
+        self.destroy()
+
+    # Define o método executado ao cancelar.
+    def on_cancel(self):
+
+        # Mantém o resultado ausente e fecha a janela.
+        self.result = None
+        self.destroy()
+
+
 # Define a janela principal da PoC.
 class AnalyzerWindow(ttk.Frame):
     """
@@ -641,14 +907,45 @@ class AnalyzerWindow(ttk.Frame):
             padx=(8, 8),
         )
 
+        # Cria o quadro que agrupa os botões do ponto de entrada.
+        entry_buttons = ttk.Frame(form)
+
+        # Posiciona o quadro dos botões.
+        entry_buttons.grid(row=row, column=2, sticky="w", pady=4)
+
         # Cria o botão que detecta as funções do código-fonte.
         ttk.Button(
-            form,
+            entry_buttons,
             text="Detectar",
             **boot(bootstyle="secondary-outline"),
             command=self.detect_entry_points,
             width=10,
-        ).grid(row=row, column=2, sticky="w", pady=4)
+        ).pack(side="left")
+
+        # Cria o botão que deriva os pontos de entrada do consumidor.
+        #
+        # É o estágio 1 da análise em dois estágios, disponível também
+        # pelo script tools/derive_entry_points.py.
+        ttk.Button(
+            entry_buttons,
+            text="Derivar...",
+            **boot(bootstyle="secondary-outline"),
+            command=self.derive_entry_points_from_consumer,
+            width=10,
+        ).pack(side="left", padx=(4, 0))
+
+        # Cria o botão que carrega os pontos de entrada de um arquivo.
+        #
+        # Existe para a análise em dois estágios, em que a lista é
+        # produzida por tools/derive_entry_points.py e pode conter
+        # dezenas de nomes — inviável de digitar ou colar no campo.
+        ttk.Button(
+            entry_buttons,
+            text="Do arquivo...",
+            **boot(bootstyle="secondary-outline"),
+            command=self.load_entry_points,
+            width=12,
+        ).pack(side="left", padx=(4, 0))
 
         # Avança para a próxima linha do formulário.
         row += 1
@@ -1343,6 +1640,219 @@ class AnalyzerWindow(ttk.Frame):
                 self.write(
                     f"Ponto de entrada sugerido: {suggestions[0]}"
                 )
+
+    # Define o método que deriva os pontos de entrada do consumidor.
+    def derive_entry_points_from_consumer(self):
+        """
+        Executa o estágio 1 da análise em dois estágios.
+
+        A biblioteca é o que já está no campo "Código-fonte". Falta
+        apenas indicar quem a consome, e a sua linguagem.
+
+        O resultado preenche o campo de ponto de entrada, e o analista
+        pode gravá-lo em arquivo para reutilizar.
+        """
+
+        # Obtém o caminho da biblioteca, que é o código-fonte atual.
+        library = self.source.get().strip()
+
+        # Verifica se a biblioteca foi informada.
+        if not library:
+
+            # Avisa o analista e interrompe a derivação.
+            messagebox.showwarning(
+                "Código-fonte não informado",
+                "Selecione primeiro a pasta da biblioteca no campo "
+                "'Código-fonte'. Os pontos de entrada serão derivados "
+                "a partir do código que a consome.",
+            )
+            return
+
+        # Abre a caixa de diálogo que pede o consumidor.
+        dialog = ConsumerDialog(self.winfo_toplevel(), library)
+
+        # Aguarda o fechamento da janela antes de continuar.
+        self.wait_window(dialog)
+
+        # Encerra quando o analista cancela.
+        if dialog.result is None:
+            return
+
+        # Informa o início da derivação.
+        self.write("")
+        self.write("Derivando pontos de entrada a partir do consumidor.")
+
+        # Inicia o tratamento dos erros previstos pela PoC.
+        try:
+
+            # Executa a derivação com a mesma implementação usada pelo
+            # script de linha de comando.
+            nomes, consumidor, biblioteca, avisos = derive_entry_points(
+                consumer=dialog.result["consumer"],
+                library=library,
+                consumer_language=dialog.result["consumer_language"],
+                library_language=self.selected_language(),
+            )
+
+        # Captura os erros previstos.
+        except VectorError as error:
+
+            # Registra o erro no log.
+            self.write(f"Erro: {error}")
+
+            # Exibe a mensagem em uma caixa de erro.
+            messagebox.showerror("Erro na derivação", str(error))
+            return
+
+        # Relata os números encontrados.
+        self.write(
+            f"Consumidor: {len(consumidor.sources)} arquivo(s), "
+            f"{len(consumidor.functions)} função(ões) declarada(s)"
+        )
+        self.write(
+            f"Biblioteca: {len(biblioteca.sources)} arquivo(s), "
+            f"{len(biblioteca.functions)} função(ões) declarada(s)"
+        )
+        self.write(f"Pontos de entrada derivados: {len(nomes)}")
+
+        # Exibe os avisos produzidos pela derivação.
+        #
+        # O aviso mais importante aqui é o de linguagens misturadas: ele
+        # indica que uma das pastas provavelmente aponta para a raiz do
+        # projeto em vez da camada correta.
+        for aviso in avisos:
+            self.write(f"Aviso: {aviso}")
+
+        # Verifica se algum aviso foi produzido.
+        if avisos:
+
+            # Destaca o problema em uma caixa, pois ele altera o
+            # resultado de forma silenciosa.
+            messagebox.showwarning(
+                "Verifique os caminhos informados",
+                "\n\n".join(avisos),
+            )
+
+        # Verifica se nenhuma função em comum foi encontrada.
+        if not nomes:
+
+            # Alerta o analista, pois o resultado provavelmente indica
+            # um erro nos caminhos ou nas linguagens informadas.
+            messagebox.showwarning(
+                "Nenhum ponto de entrada",
+                "O consumidor não chama nenhuma função declarada na "
+                "biblioteca. Verifique os caminhos e as linguagens "
+                "informadas.",
+            )
+            return
+
+        # Preenche o campo com a lista derivada.
+        self.entry_point.set(",".join(nomes))
+
+        # Oferece a gravação da lista em arquivo.
+        #
+        # Guardar a lista permite reproduzir a análise depois sem
+        # repetir o estágio 1.
+        if messagebox.askyesno(
+            "Gravar a lista?",
+            f"{len(nomes)} ponto(s) de entrada derivado(s).\n\n"
+            f"Deseja gravar a lista em um arquivo, para reutilizá-la "
+            f"depois sem repetir esta etapa?",
+        ):
+            destino = filedialog.asksaveasfilename(
+                title="Gravar os pontos de entrada",
+                defaultextension=".txt",
+                initialfile="entry_points.txt",
+                filetypes=[
+                    ("Arquivo de texto", "*.txt"),
+                    ("Todos os arquivos", "*.*"),
+                ],
+            )
+
+            # Grava o arquivo quando um destino foi escolhido.
+            if destino:
+                try:
+                    Path(destino).write_text(
+                        ",".join(nomes) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.write(f"Lista gravada em: {destino}")
+                except OSError as error:
+                    messagebox.showerror(
+                        "Não foi possível gravar",
+                        str(error),
+                    )
+
+    # Define o método que carrega os pontos de entrada de um arquivo.
+    def load_entry_points(self):
+        """
+        Lê uma lista de pontos de entrada gravada em arquivo.
+
+        A lista é a produzida por tools/derive_entry_points.py, no
+        primeiro estágio da análise em dois estágios. Ela costuma ter
+        dezenas de nomes, o que torna impraticável digitá-la ou colá-la
+        diretamente no campo.
+        """
+
+        # Abre o diálogo de seleção de arquivo.
+        chosen = filedialog.askopenfilename(
+            title="Selecione o arquivo com os pontos de entrada",
+            filetypes=[
+                ("Arquivo de texto", "*.txt"),
+                ("Todos os arquivos", "*.*"),
+            ],
+        )
+
+        # Encerra quando o analista cancela a seleção.
+        if not chosen:
+            return
+
+        # Inicia o tratamento de erros de leitura.
+        try:
+
+            # Lê o conteúdo do arquivo.
+            conteudo = Path(chosen).read_text(encoding="utf-8")
+
+        # Captura falhas de leitura e de decodificação.
+        except (OSError, UnicodeDecodeError) as error:
+
+            # Exibe a mensagem em uma caixa de erro.
+            messagebox.showerror(
+                "Não foi possível ler o arquivo",
+                str(error),
+            )
+            return
+
+        # Normaliza o conteúdo em uma lista separada por vírgulas.
+        #
+        # O arquivo pode trazer os nomes separados por vírgula, por
+        # quebra de linha, ou por ambos. A normalização aceita as três
+        # formas e descarta entradas vazias.
+        nomes = [
+            nome.strip()
+            for parte in conteudo.replace(",", "\n").splitlines()
+            for nome in [parte]
+            if nome.strip()
+        ]
+
+        # Verifica se algum nome foi encontrado.
+        if not nomes:
+
+            # Avisa o analista e interrompe o carregamento.
+            messagebox.showwarning(
+                "Arquivo vazio",
+                "O arquivo não contém nenhum nome de função.",
+            )
+            return
+
+        # Preenche o campo com a lista normalizada.
+        self.entry_point.set(",".join(nomes))
+
+        # Informa o resultado no registro.
+        self.write(
+            f"Pontos de entrada carregados de {chosen}: "
+            f"{len(nomes)} função(ões)."
+        )
 
     # Define o método que valida os campos do formulário.
     def validate_form(self):

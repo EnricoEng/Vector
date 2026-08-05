@@ -124,6 +124,90 @@ def detect_language(path):
     return best_language
 
 
+# Define as extensões que mais de uma linguagem utiliza legitimamente.
+#
+# A extensão .h é usada tanto por C quanto por C++. Ela pertence ao
+# conjunto de C, para que cabeçalhos de projetos em C sejam analisados,
+# mas encontrá-la em uma pasta de C++ é normal e não indica mistura de
+# camadas.
+#
+# Sem esta ressalva, analisar uma pasta de C++ produziria um aviso de
+# "arquivos de C ignorados" que descreveria apenas os próprios
+# cabeçalhos daquele código.
+AMBIGUOUS_EXTENSIONS = {
+    ".h": {"c", "cpp"},
+}
+
+
+# Define a função que conta os arquivos ignorados por escolha de
+# linguagem.
+def ignored_language_files(path, language):
+    """
+    Conta os arquivos das demais linguagens presentes no caminho.
+
+    Devolve um dicionário no formato {linguagem: quantidade}, contendo
+    apenas as linguagens diferentes da analisada que possuem arquivos.
+
+    A contagem existe porque a PoC analisa uma linguagem por vez. Ao
+    apontar a ferramenta para uma pasta que mistura linguagens, os
+    arquivos das demais são simplesmente ignorados, sem que nada seja
+    dito — e o resultado passa a descrever um escopo que não corresponde
+    a nenhuma parte real do produto.
+
+    Um detalhe agrava o problema: a extensão .h pertence ao conjunto de
+    C, mas é usada também por projetos em C++. Uma pasta com C++ pode
+    ter seus cabeçalhos lidos como C enquanto os arquivos .cc ficam de
+    fora, o que torna a fronteira invisível.
+
+    Esse mesmo detalhe exige uma ressalva na contagem. Os arquivos cuja
+    extensão é compartilhada entre a linguagem analisada e a outra não
+    são contados, pois a sua presença é esperada e não indica mistura
+    de camadas. Encontrar .h em uma pasta de C++ é normal; encontrar
+    .cc em uma pasta de C não é.
+    """
+
+    # Converte o caminho recebido em um objeto Path.
+    path = Path(path)
+
+    # Não há mistura possível quando o caminho é um arquivo único.
+    if path.is_file():
+        return {}
+
+    # Inicializa o dicionário de contagens.
+    counts = {}
+
+    # Percorre as linguagens suportadas.
+    for name, definition in SUPPORTED_LANGUAGES.items():
+
+        # Ignora a linguagem que está sendo analisada.
+        if name == language:
+            continue
+
+        # Seleciona as extensões que de fato indicam a outra linguagem.
+        #
+        # Uma extensão compartilhada com a linguagem analisada é
+        # descartada: encontrá-la é esperado e não sinaliza mistura.
+        exclusivas = {
+            extensao
+            for extensao in definition["extensions"]
+            if language not in AMBIGUOUS_EXTENSIONS.get(extensao, set())
+        }
+
+        # Prossegue apenas quando restou alguma extensão exclusiva.
+        if not exclusivas:
+            continue
+
+        # Conta os arquivos daquela linguagem presentes na pasta.
+        total = len(collect_source_files(path, exclusivas))
+
+        # Registra apenas as linguagens que possuem arquivos.
+        if total:
+            counts[name] = total
+
+    # Devolve as contagens encontradas.
+    return counts
+
+
 # Define a função que executa a análise estática.
 def analyze(path, language=None):
     """

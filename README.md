@@ -22,7 +22,7 @@ Quando não é, a vulnerabilidade pode ser documentadamente despriorizada. Quand
 | **Interfaces** | Gráfica (tkinter) e linha de comando |
 | **Escopo da análise** | Um arquivo isolado ou um projeto inteiro |
 | **Saída** | VEX em formato próprio e/ou **CycloneDX 1.6** validável, mais grafo de chamadas em PNG/DOT |
-| **Requisito mínimo** | Python 3.9 ou superior |
+| **Requisito mínimo** | Python 3.10 ou superior |
 
 > [!IMPORTANT]
 > Este é um protótipo acadêmico. A ferramenta **não substitui** soluções profissionais de SAST, SCA, DAST, análise de fluxo de dados ou análise de binários. Leia [Limitações](#limitações) antes de usar os resultados em qualquer decisão real.
@@ -58,7 +58,7 @@ Quando não é, a vulnerabilidade pode ser documentadamente despriorizada. Quand
 
 Para quem quer apenas ver a ferramenta funcionando. Os detalhes de cada etapa estão em [Instalação](#instalação) e no [Guia de uso](#guia-de-uso-passo-a-passo).
 
-**Pré-requisitos:** Python 3.9 ou superior e Git.
+**Pré-requisitos:** Python 3.10 ou superior e Git.
 
 **1. Obter o projeto**
 
@@ -260,7 +260,9 @@ O critério é assimétrico de propósito. Um falso positivo custa tempo do anal
 python --version
 ```
 
-É necessário Python **3.9 ou superior**. No macOS e no Linux, use `python3` no lugar de `python` em todos os comandos deste guia.
+É necessário Python **3.10 ou superior**. No macOS e no Linux, use `python3` no lugar de `python` em todos os comandos deste guia.
+
+O mínimo é ditado pelo `ttkbootstrap`, que exige 3.10 a partir da versão 1.19. A análise em si funciona a partir do 3.9, mas o `pip install -r requirements.txt` falha em versões anteriores porque não encontra a versão fixada do tema.
 
 Para usar a interface gráfica, verifique também a versão do Tk:
 

@@ -4,8 +4,18 @@
 # entre o ponto de entrada da aplicação e a função associada à
 # vulnerabilidade?
 
-# Importa a exceção utilizada quando o ponto de entrada não existe.
-from .errors import EntryPointError
+# Importa Path para comparar os caminhos informados.
+from pathlib import Path
+
+# Importa as exceções previstas pela PoC.
+from .errors import EntryPointError, SourceError
+
+# Importa o seletor de analisador por linguagem, usado na derivação de
+# pontos de entrada a partir do código que consome uma biblioteca.
+from .parsers import (
+    analyze as analyze_source,
+    ignored_language_files,
+)
 
 
 # Define o texto que representa a seleção de todos os pontos de entrada.
@@ -344,3 +354,150 @@ def validate_entry_points(result, entry_points):
 
     # Interrompe a execução com a mensagem construída.
     raise EntryPointError(message)
+
+
+# Define a função que lista os nomes chamados por um código.
+def called_names(result):
+    """
+    Devolve o conjunto de nomes chamados por qualquer função do código.
+
+    Inclui os nomes que não são declarados no próprio código, que são
+    justamente os candidatos a pertencer a uma biblioteca externa.
+    """
+
+    # Reúne os destinos de todas as arestas do grafo.
+    return {
+        callee
+        for callees in result.graph.values()
+        for callee in callees
+    }
+
+
+# Define a função que deriva pontos de entrada a partir do consumidor.
+def derive_entry_points(
+    consumer,
+    library,
+    consumer_language=None,
+    library_language=None,
+):
+    """
+    Devolve os nomes de função da biblioteca que o consumidor chama.
+
+    Resolve o problema de analisar uma biblioteca isoladamente: nela não
+    existe um "main", e toda função pública é um começo possível de
+    execução. Usar todas produz uma análise pessimista, que considera
+    alcançável qualquer coisa que a biblioteca faça, inclusive o que o
+    programa real nunca aciona.
+
+    O critério é a interseção entre dois conjuntos:
+
+    - os nomes chamados em algum ponto do código do consumidor;
+    - os nomes efetivamente declarados na biblioteca.
+
+    A interseção evita duas fontes de erro. Nomes chamados pelo
+    consumidor que não pertencem à biblioteca, como funções da
+    biblioteca padrão, ficam de fora. E funções da biblioteca que o
+    consumidor nunca chama também ficam, que é o objetivo.
+
+    As duas camadas costumam estar em linguagens diferentes, como um
+    consumidor em C++ que usa uma biblioteca em C. Por isso a linguagem
+    de cada lado é informada separadamente.
+
+    Devolve uma tupla com a lista de nomes, o resultado da análise do
+    consumidor, o da biblioteca e a lista de avisos, permitindo ao
+    chamador relatar os números e os problemas encontrados.
+    """
+
+    # Converte os dois caminhos para a forma absoluta.
+    #
+    # A comparação exige caminhos resolvidos, pois "a/b" e "./a/b/"
+    # apontam para o mesmo lugar mas não são iguais como texto.
+    consumer_path = Path(consumer).resolve()
+    library_path = Path(library).resolve()
+
+    # Recusa a derivação quando os dois caminhos são o mesmo.
+    #
+    # Cruzar uma pasta consigo mesma produz as chamadas internas da
+    # própria biblioteca, e não o que um consumidor externo utiliza. O
+    # resultado seria uma lista enorme e sem significado, por isso o
+    # caso é tratado como erro e não como aviso.
+    if consumer_path == library_path:
+        raise SourceError(
+            "O consumidor e a biblioteca apontam para a mesma pasta "
+            f"({library}). O consumidor deve ser o código que utiliza "
+            "a biblioteca, e não a própria biblioteca. Cruzar uma "
+            "pasta consigo mesma devolveria apenas as chamadas "
+            "internas dela."
+        )
+
+    # Analisa o código do consumidor.
+    consumer_result = analyze_source(consumer, consumer_language)
+
+    # Analisa o código da biblioteca.
+    library_result = analyze_source(library, library_language)
+
+    # Obtém os nomes chamados pelo consumidor.
+    chamados = called_names(consumer_result)
+
+    # Obtém os nomes declarados pela biblioteca.
+    #
+    # A propriedade functions traz apenas as funções declaradas, e não
+    # as que a própria biblioteca chama sem declarar. Um ponto de
+    # entrada precisa existir de fato no código analisado.
+    declarados = set(library_result.functions)
+
+    # Inicializa a lista de avisos.
+    warnings = []
+
+    # Verifica se uma das pastas está contida na outra.
+    #
+    # Não é necessariamente um erro, mas costuma indicar que uma delas
+    # aponta para um nível acima do pretendido, o que faz parte do
+    # código ser contado dos dois lados.
+    if (
+        library_path in consumer_path.parents
+        or consumer_path in library_path.parents
+    ):
+        warnings.append(
+            "Uma das pastas informadas está contida na outra. Parte do "
+            "código pode estar sendo contada tanto como consumidor "
+            "quanto como biblioteca, o que infla a lista de pontos de "
+            "entrada."
+        )
+
+    # Verifica se alguma das duas pastas mistura linguagens.
+    #
+    # Este é o engano mais provável nesta etapa: apontar a biblioteca
+    # para a raiz de um projeto que contém as duas camadas. A análise
+    # então lê os cabeçalhos do consumidor como se fossem da
+    # biblioteca, e métodos do consumidor passam a aparecer entre os
+    # pontos de entrada derivados.
+    for rotulo, caminho, resultado in (
+        ("do consumidor", consumer, consumer_result),
+        ("da biblioteca", library, library_result),
+    ):
+
+        # Conta os arquivos das demais linguagens naquela pasta.
+        ignorados = ignored_language_files(caminho, resultado.language)
+
+        # Registra o aviso quando existem arquivos de fora.
+        if ignorados:
+            detalhe = ", ".join(
+                f"{quantidade} de {nome}"
+                for nome, quantidade in sorted(ignorados.items())
+            )
+            warnings.append(
+                f"A pasta {rotulo} contém arquivos de outras "
+                f"linguagens que não foram analisados: {detalhe}. Ela "
+                f"foi lida como {resultado.language}. Verifique se o "
+                f"caminho aponta para a camada correta, e não para a "
+                f"raiz de um projeto que contém as duas."
+            )
+
+    # Devolve a interseção, em ordem alfabética.
+    return (
+        sorted(chamados & declarados),
+        consumer_result,
+        library_result,
+        warnings,
+    )

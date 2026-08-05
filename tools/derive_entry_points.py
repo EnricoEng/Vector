@@ -15,18 +15,22 @@
 # código do consumidor, e grava o resultado no formato aceito pelo
 # argumento --entry do analyzer.py.
 #
-# As duas camadas costumam estar em linguagens diferentes, como no caso
-# do Chromium, escrito em C++, que consome o libxml2, escrito em C. Por
-# isso a linguagem de cada lado é informada separadamente.
+# As duas camadas costumam estar em linguagens diferentes: uma aplicação
+# em C++ que consome uma biblioteca em C, por exemplo. Por isso a
+# linguagem de cada lado é informada separadamente.
 #
 # Uso:
 #
 #     python tools/derive_entry_points.py \
-#         --consumer cases/SF-529088_Projeto_libxml2/chromium/blink/xml \
+#         --consumer caminho/da/aplicacao \
 #         --consumer-language cpp \
-#         --library cases/SF-529088_Projeto_libxml2/third_party/libxml \
+#         --library caminho/da/biblioteca \
 #         --library-language c \
-#         --output cases/SF-529088_Projeto_libxml2/entry_points.txt
+#         --output entry_points.txt
+#
+# O consumidor e a biblioteca precisam ser pastas distintas. Informar a
+# mesma pasta nos dois lados devolveria apenas as chamadas internas da
+# biblioteca, e por isso é recusado.
 
 # Importa o módulo argparse, utilizado para receber argumentos
 # informados pela linha de comando.
@@ -46,68 +50,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # Importa a exceção base, usada para tratar os erros previstos.
 from vector.errors import VectorError
 
-# Importa o seletor de analisador por linguagem.
-from vector.parsers import analyze
-
-
-# Define a função que descobre as funções chamadas por um código.
-def called_functions(result):
-    """
-    Devolve o conjunto de nomes chamados por qualquer função do código.
-
-    Inclui os nomes que não são declarados no próprio código, que são
-    justamente os candidatos a pertencer a uma biblioteca externa.
-    """
-
-    # Reúne os destinos de todas as arestas do grafo.
-    return {
-        callee
-        for callees in result.graph.values()
-        for callee in callees
-    }
-
-
-# Define a função que deriva os pontos de entrada.
-def derive(consumer, consumer_language, library, library_language):
-    """
-    Devolve os nomes de função da biblioteca que o consumidor chama.
-
-    O critério é a interseção entre dois conjuntos:
-
-    - os nomes chamados em algum ponto do código do consumidor;
-    - os nomes efetivamente declarados na biblioteca.
-
-    A interseção evita duas fontes de erro. Nomes chamados pelo
-    consumidor que não pertencem à biblioteca, como funções da
-    biblioteca padrão, ficam de fora. E funções da biblioteca que o
-    consumidor nunca chama também ficam, que é o objetivo do script.
-
-    Devolve uma tupla com a lista de nomes e as duas análises, para que
-    o chamador possa relatar os números encontrados.
-    """
-
-    # Analisa o código do consumidor.
-    consumer_result = analyze(consumer, consumer_language)
-
-    # Analisa o código da biblioteca.
-    library_result = analyze(library, library_language)
-
-    # Obtém os nomes chamados pelo consumidor.
-    chamados = called_functions(consumer_result)
-
-    # Obtém os nomes declarados pela biblioteca.
-    #
-    # A propriedade functions traz apenas as funções declaradas, e não
-    # as que a própria biblioteca chama sem declarar. Um ponto de
-    # entrada precisa existir de fato no código analisado.
-    declarados = set(library_result.functions)
-
-    # Devolve a interseção, em ordem alfabética.
-    return (
-        sorted(chamados & declarados),
-        consumer_result,
-        library_result,
-    )
+# Importa a derivação de pontos de entrada.
+#
+# A implementação fica no pacote vector, e não aqui, para que a
+# interface gráfica use exatamente a mesma lógica.
+from vector.reachability import derive_entry_points
 
 
 # Define a função que monta o interpretador de argumentos.
@@ -177,11 +124,11 @@ def main():
     try:
 
         # Deriva os pontos de entrada.
-        entradas, consumidor, biblioteca = derive(
-            args.consumer,
-            args.consumer_language,
-            args.library,
-            args.library_language,
+        entradas, consumidor, biblioteca, avisos = derive_entry_points(
+            consumer=args.consumer,
+            library=args.library,
+            consumer_language=args.consumer_language,
+            library_language=args.library_language,
         )
 
     # Captura os erros previstos pela PoC.
@@ -215,6 +162,10 @@ def main():
         f"Pontos de entrada derivados: {len(entradas)}",
         file=sys.stderr,
     )
+
+    # Exibe os avisos produzidos pela derivação.
+    for aviso in avisos:
+        print(f"Aviso: {aviso}", file=sys.stderr)
 
     # Verifica se nenhuma função em comum foi encontrada.
     if not entradas:

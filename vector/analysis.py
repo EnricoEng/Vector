@@ -23,8 +23,9 @@ from .cyclonedx import (
 # Importa a geração da imagem do grafo.
 from .graph_image import generate_call_graph_image
 
-# Importa o seletor de analisador por linguagem.
-from .parsers import analyze as analyze_source
+# Importa o seletor de analisador por linguagem e a contagem de
+# arquivos ignorados por escolha de linguagem.
+from .parsers import analyze as analyze_source, ignored_language_files
 
 # Importa a análise de alcançabilidade e as funções auxiliares que
 # interpretam e validam os pontos de entrada.
@@ -131,6 +132,38 @@ def run_analysis(
         f"Arquivos analisados: {len(static_analysis.sources)} "
         f"({static_analysis.language})"
     )
+
+    # Verifica se a pasta contém arquivos de outras linguagens.
+    #
+    # A PoC analisa uma linguagem por vez. Quando o caminho informado
+    # mistura linguagens, os arquivos das demais são ignorados em
+    # silêncio, e o escopo analisado deixa de corresponder a qualquer
+    # parte real do produto.
+    ignorados = ignored_language_files(source, static_analysis.language)
+
+    # Verifica se algum arquivo ficou de fora.
+    if ignorados:
+
+        # Monta a descrição das linguagens ignoradas.
+        detalhe = ", ".join(
+            f"{quantidade} de {nome}"
+            for nome, quantidade in sorted(ignorados.items())
+        )
+
+        # Monta a mensagem do aviso.
+        message = (
+            f"A pasta contém arquivos de outras linguagens que não "
+            f"foram analisados: {detalhe}. A análise cobre apenas "
+            f"{static_analysis.language}. Se o alvo é outra parte do "
+            f"projeto, aponte --source para a subpasta correspondente "
+            f"e informe --language."
+        )
+
+        # Registra o aviso na lista.
+        warnings.append(message)
+
+        # Informa o aviso ao chamador.
+        report(f"Aviso: {message}")
 
     # Obtém o grafo de chamadas.
     graph = static_analysis.graph
